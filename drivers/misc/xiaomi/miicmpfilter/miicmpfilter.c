@@ -76,6 +76,7 @@ static unsigned int hook_func(void *priv, struct sk_buff *skb,
 	struct miicmpfilter_event event;
 	struct iphdr ip_buffer;
 	u8 icmp_buffer[MIICMPFILTER_ICMP_BYTES];
+	const struct net_device *out;
 	const struct iphdr *ip;
 	const u8 *icmp;
 	/*
@@ -85,27 +86,32 @@ static unsigned int hook_func(void *priv, struct sk_buff *skb,
 	 */
 	char address[16];
 
-	if (!skb || !state || !state->out ||
-	    !miicmpfilter_is_wlan(state->out->name))
+	if (!skb)
+		return NF_ACCEPT;
+
+	/* Stock selects skb->dev rather than the hook state's output device. */
+	out = skb->dev;
+	if (!out || !miicmpfilter_is_wlan(out->name))
 		return NF_ACCEPT;
 
 	/*
 	 * Intentional stock difference (docs/driver-bringup/dash-miicmpfilter.md,
 	 * MF010): stock dereferences headers through ICMP byte 31 unchecked.
-	 * Copy non-linear headers when needed; unavailable bytes suppress only
-	 * the notification, never packet delivery (NF_ACCEPT is retained).
+	 * Copy non-linear headers when needed and validate potentially negative
+	 * header offsets; unavailable bytes suppress only the notification, never
+	 * packet delivery (NF_ACCEPT is retained).
 	 */
-	ip = skb_header_pointer(skb, skb_network_offset(skb), sizeof(ip_buffer),
-				&ip_buffer);
-	icmp = skb_header_pointer(skb, skb_transport_offset(skb),
-				  sizeof(icmp_buffer), icmp_buffer);
+	ip = skb_header_pointer_careful(skb, skb_network_offset(skb),
+					sizeof(ip_buffer), &ip_buffer);
+	icmp = skb_header_pointer_careful(skb, skb_transport_offset(skb),
+					  sizeof(icmp_buffer), icmp_buffer);
 	if (!ip || !icmp ||
 	    !miicmpfilter_parse_event(ip->protocol, ip->saddr, icmp,
 				      sizeof(icmp_buffer), &event))
 		return NF_ACCEPT;
 
 	snprintf(address, sizeof(address), "%pI4", &event.address);
-	send_nl_msg(event.port, address, state->out->name);
+	send_nl_msg(event.port, address, out->name);
 	return NF_ACCEPT;
 }
 
@@ -230,10 +236,16 @@ static int __init miicmpfilter_init(void)
 
 static void __exit miicmpfilter_exit(void)
 {
-	unregister_genl_family();
-	if (net_registered)
+	if (net_registered) {
+		/*
+		 * Intentional stock difference: stop and drain packet callbacks
+		 * before unregistering the family they multicast through.
+		 */
 		nf_unregister_net_hooks(&init_net, &miicmpfilter_hook, 1);
-	net_registered = false;
+		net_registered = false;
+		synchronize_net();
+	}
+	unregister_genl_family();
 	pr_info("MIICMPFILTER: exit\n");
 }
 

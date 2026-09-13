@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 GitHub @YorokobiMaster
+
+config XIAOMI_PERF_ACTUATOR
+	tristate "Xiaomi performance actuator"
+	help
+	  Provide the Xiaomi ioctl dispatch registry used by performance modules.

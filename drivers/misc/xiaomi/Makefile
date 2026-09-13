@@ -30,3 +30,7 @@ obj-$(CONFIG_XIAOMI_MI_UBT_TEST) += mi_ubt_test/
 obj-$(CONFIG_XIAOMI_CRASH_MODULE) += crash_module/
 
 obj-$(CONFIG_XIAOMI_MI_MEMORY) += mi_memory/
+obj-$(CONFIG_XIAOMI_PERF_ACTUATOR) += perf_actuator/
+obj-$(CONFIG_XIAOMI_MIICMPFILTER) += miicmpfilter/
+obj-y += millet/
+obj-$(CONFIG_XIAOMI_MILLET_OEM_CGROUP) += millet_oem_cgroup/

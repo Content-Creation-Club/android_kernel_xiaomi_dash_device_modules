@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config XIAOMI_MILLET_OEM_CGROUP
+	tristate "Xiaomi Millet freezer cgroup policy"
+	depends on CGROUP_FREEZER
+	help
+	  Install Xiaomi's legacy freezer cgroup migration policy. Cross-task
+	  moves are allowed only for Android system UID 1000 or callers with
+	  CAP_SYS_ADMIN in the initial user namespace. Self-migration remains
+	  allowed.

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config XIAOMI_MILLET_CORE
+	tristate "Xiaomi Millet core"
+	depends on NET
+	help
+	  Xiaomi protocol-30 Millet transport and subsystem registry.
+
+config XIAOMI_MILLET_HS
+	tristate "Xiaomi Millet handshake"
+	depends on XIAOMI_MILLET_CORE
+	help
+	  Kernel handshake echo subsystem.
+
+config XIAOMI_MILLET_SIG
+	tristate "Xiaomi Millet signal reporting"
+	depends on XIAOMI_MILLET_CORE
+	depends on FREEZER
+	help
+	  Reports selected signals delivered to freezing or frozen tasks.
+
+config XIAOMI_MILLET_PKG
+	tristate "Xiaomi Millet package network reporting"
+	depends on XIAOMI_MILLET_CORE
+	depends on NETFILTER && INET && IPV6
+	help
+	  Reports one incoming TCP event for each armed application UID.
+
+config XIAOMI_BINDER_GKI
+	tristate "Xiaomi Millet Binder hook bridge"
+	depends on XIAOMI_MILLET_CORE
+	depends on ANDROID_BINDER_IPC
+	help
+	  Bridges Android Binder vendor hooks to Millet callbacks.
+
+config XIAOMI_MILLET_BINDER
+	tristate "Xiaomi Millet Binder reporting"
+	depends on XIAOMI_BINDER_GKI
+	help
+	  Reports frozen-task Binder events and application Binder status.
