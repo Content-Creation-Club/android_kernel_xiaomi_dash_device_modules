@@ -659,11 +659,11 @@ static ssize_t xiaomi_touch_dev_read(struct file *file, char __user *buf,
 	int index;
 
 	if (!client || client->touch_id < 0 || count != sizeof(common_data_t))
-		return -EINVAL;
+		return 0;
 
 	panel = &touch_panel_data[client->touch_id];
 	if (!panel->registered)
-		return -ENODEV;
+		return 0;
 
 	mutex_lock(&panel->common_data_lock);
 	index = atomic_read(&client->common_data_index);
@@ -673,7 +673,7 @@ static ssize_t xiaomi_touch_dev_read(struct file *file, char __user *buf,
 	}
 	if (copy_to_user(buf, &panel->common_data_buf[index], count)) {
 		mutex_unlock(&panel->common_data_lock);
-		return -EFAULT;
+		return -1;
 	}
 	if (++index >= COMMON_DATA_BUF_SIZE)
 		index = 0;
@@ -695,11 +695,11 @@ static unsigned int xiaomi_touch_dev_poll(struct file *file,
 	unsigned int mask = 0;
 
 	if (!client || client->touch_id < 0)
-		return POLLERR;
+		return 0;
 
 	panel = &touch_panel_data[client->touch_id];
 	if (!panel->registered)
-		return POLLERR;
+		return 0;
 
 	poll_wait(file, &client->poll_wait_queue_head, wait);
 	if (atomic_read(&client->common_data_index) !=
@@ -784,14 +784,17 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 
 	switch (_IOC_NR(cmd)) {
 	case COMMON_DATA_CMD:
-		if (_IOC_SIZE(cmd) != sizeof(common_data_t) ||
-		    copy_from_user(&common_data, argp, sizeof(common_data)))
-			return -EFAULT;
+		if (_IOC_SIZE(cmd) != sizeof(common_data_t))
+			return -EINVAL;
+		if (copy_from_user(&common_data, argp, sizeof(common_data)))
+			return -1;
 		touch_id = common_data.touch_id;
 		if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL ||
 		    !touch_pdata || !touch_pdata->touch_data[touch_id] ||
-		    client->touch_id != touch_id ||
-		    common_data.data_len > CMD_DATA_BUF_SIZE)
+		    !touch_panel_data[touch_id].registered ||
+		    client->touch_id != touch_id)
+			return -1;
+		if (common_data.data_len > CMD_DATA_BUF_SIZE)
 			return -EINVAL;
 		touch_data = touch_pdata->touch_data[touch_id];
 		panel = &touch_panel_data[touch_id];
@@ -799,30 +802,21 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 		mutex_lock(&touch_pdata->device->mutex);
 		switch (common_data.cmd) {
 		case SET_CUR_VALUE:
-			if (!common_data.data_len) {
-				ret = -EOPNOTSUPP;
+			if (common_data.data_buf[0] < 0)
+				break;
+			if (common_data.mode == Touch_GAMETURBOTOOL_FOLLOWUP &&
+			    common_data.data_buf[0] > 100 &&
+			    common_data.data_buf[0] < 127) {
+				sendnlmsg(common_data.data_buf[0]);
 				break;
 			}
-			memset(&common_data.data_buf[common_data.data_len], 0,
-			       sizeof(common_data.data_buf) -
-			       common_data.data_len * sizeof(common_data.data_buf[0]));
+			/* Stock keeps the request payload, not the callback status. */
 			if (common_data.mode < Touch_Mode_NUM) {
-				if (!touch_data->setModeValue) {
-					ret = -EOPNOTSUPP;
-					break;
-				}
-				common_data.data_buf[0] =
+				if (touch_data->setModeValue)
 					touch_data->setModeValue(common_data.mode,
 						common_data.data_buf[0]);
-			} else {
-				if (!panel->registered ||
-				    !panel->hardware_operation.set_cur_value) {
-					ret = -EOPNOTSUPP;
-					break;
-				}
-				common_data.data_buf[0] =
-					panel->hardware_operation.set_cur_value(
-						common_data.mode,
+			} else if (panel->hardware_operation.set_cur_value) {
+				panel->hardware_operation.set_cur_value(common_data.mode,
 						common_data.data_buf);
 			}
 			break;
@@ -830,55 +824,37 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 		case GET_DEF_VALUE:
 		case GET_MIN_VALUE:
 		case GET_MAX_VALUE:
-			if (!touch_data->getModeValue) {
-				ret = -EOPNOTSUPP;
-				break;
-			}
-			common_data.data_buf[0] =
-				touch_data->getModeValue(common_data.mode,
-					common_data.cmd);
-			common_data.data_len = 1;
+			if (common_data.mode < Touch_Mode_NUM && touch_data->getModeValue)
+				common_data.data_buf[0] =
+					touch_data->getModeValue(common_data.mode,
+						common_data.cmd);
 			break;
 		case GET_MODE_VALUE:
-			if (!touch_data->getModeAll) {
-				ret = -EOPNOTSUPP;
-				break;
-			}
-			ret = touch_data->getModeAll(common_data.mode,
-					common_data.data_buf);
-			if (!ret)
-				common_data.data_len = VALUE_TYPE_SIZE;
+			if (common_data.mode < Touch_Mode_NUM && touch_data->getModeAll)
+				touch_data->getModeAll(common_data.mode,
+						common_data.data_buf);
 			break;
 		case RESET_MODE:
-			if (!touch_data->resetMode) {
-				ret = -EOPNOTSUPP;
-				break;
-			}
-			common_data.data_buf[0] =
+			if (touch_data->resetMode)
 				touch_data->resetMode(common_data.mode);
-			common_data.data_len = 1;
 			break;
 		case SET_LONG_VALUE:
-			if (!touch_data->setModeLongValue) {
-				ret = -EOPNOTSUPP;
-				break;
-			}
-			ret = touch_data->setModeLongValue(common_data.mode,
-					common_data.data_len, common_data.data_buf);
+			if (touch_data->setModeLongValue)
+				touch_data->setModeLongValue(common_data.mode,
+						common_data.data_len, common_data.data_buf);
 			break;
 		case SET_THP_IC_CUR_VALUE:
-			if (!panel->hardware_operation.htc_ic_set_mode_value) {
-				ret = -EOPNOTSUPP;
-				break;
-			}
-			ret = panel->hardware_operation.htc_ic_set_mode_value(&common_data);
+			if (panel->hardware_operation.htc_ic_set_mode_value)
+				panel->hardware_operation.htc_ic_set_mode_value(&common_data);
 			break;
 		case GET_THP_IC_CUR_VALUE:
-			if (!panel->hardware_operation.htc_ic_get_mode_value) {
-				ret = -EOPNOTSUPP;
+			if (!panel->hardware_operation.htc_ic_get_mode_value ||
+			    panel->hardware_operation.htc_ic_get_mode_value(&common_data)) {
+				ret = -1;
 				break;
 			}
-			ret = panel->hardware_operation.htc_ic_get_mode_value(&common_data);
+			memcpy(&thp_ic_cmd_data_common_data, &common_data,
+			       sizeof(common_data));
 			break;
 		case SET_CMD_FOR_THP:
 			add_common_data_to_buf(touch_id, SET_CUR_VALUE,
@@ -886,69 +862,59 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 					       common_data.data_buf);
 			break;
 		case SET_CMD_FOR_DRIVER:
-			if (common_data.mode == Touch_Palm_Sensor &&
-			    common_data.data_len)
+			if (common_data.mode == Touch_Palm_Sensor)
 				update_palm_sensor_value(common_data.data_buf[0]);
 			break;
-		case GET_DUMP_PARAM:
-			if (!touch_data->getModeValue) {
-				ret = -EOPNOTSUPP;
-				break;
-			}
-			common_data.data_buf[0] =
-				touch_data->getModeValue(Touch_THP_Dump_Size, 0);
-			common_data.data_len = 1;
-			break;
 		default:
-			ret = -EOPNOTSUPP;
+			ret = -EINVAL;
 			break;
 		}
-		if (!ret && (common_data.mode == THP_HAL_INIT_READY ||
-			     common_data.mode == Touch_Suspend))
+		if (!ret && ((common_data.cmd >= GET_CUR_VALUE &&
+			      common_data.cmd <= GET_MODE_VALUE) ||
+			     common_data.cmd == GET_THP_IC_CUR_VALUE)) {
+			if (copy_to_user(argp, &common_data, sizeof(common_data))) {
+				mi_ts_err("copyback failed for command %u", common_data.cmd);
+				if (common_data.cmd == GET_THP_IC_CUR_VALUE)
+					ret = -1;
+			}
+		}
+		if (!ret && common_data.cmd != SET_CMD_FOR_THP &&
+		    common_data.cmd != SET_CMD_FOR_DRIVER &&
+		    (common_data.mode == THP_HAL_INIT_READY ||
+		     common_data.mode == Touch_Suspend))
 			add_common_data_to_buf(touch_id, common_data.cmd,
 					       common_data.mode, common_data.data_len,
 					       common_data.data_buf);
 		mutex_unlock(&touch_pdata->device->mutex);
-		if (ret < 0)
-			return ret;
-		if (copy_to_user(argp, &common_data, sizeof(common_data)))
-			return -EFAULT;
-		return 0;
+		return ret;
 
 	case HARDWARE_PARAM_CMD:
 		if (_IOC_SIZE(cmd) != sizeof(hardware_param_t))
 			return -EINVAL;
 		touch_id = client->touch_id;
 		if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL)
-			return -EINVAL;
+			return -1;
 		panel = &touch_panel_data[touch_id];
 		if (!panel->registered)
-			return -ENODEV;
-		if (copy_to_user(argp, &panel->hardware_param,
-				 sizeof(panel->hardware_param)))
-			return -EFAULT;
-		return 0;
+			return -1;
+		return copy_to_user(argp, &panel->hardware_param,
+				    sizeof(panel->hardware_param));
 
 	case SELECT_MMAP_CMD:
-		if (arg != XIAOMI_TOUCH_MMAP_FRAME &&
-		    arg != XIAOMI_TOUCH_MMAP_RAW)
-			return -EINVAL;
 		client->mmap_area = arg;
 		return 0;
 
 	case SELECT_TOUCH_ID:
+		if (client->touch_id >= 0)
+			return 0;
+		if (arg >= XIAOMI_TOUCH_MAX_PANEL)
+			return -1;
 		touch_id = arg;
-		if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL)
-			return -EINVAL;
 		panel = &touch_panel_data[touch_id];
 		if (!panel->registered)
-			return -ENODEV;
-		if (client->touch_id >= 0)
-			return client->touch_id == touch_id ? 0 : -EBUSY;
+			return -1;
 
 		client->touch_id = touch_id;
-		atomic_set(&client->common_data_index,
-			   atomic_read(&panel->common_data_index));
 		atomic_set(&client->frame_data_index,
 			   atomic_read(&panel->frame_data_index));
 		atomic_set(&client->raw_data_index,
@@ -961,8 +927,10 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 	case GET_FRAME_DATA_INDEX:
 		touch_id = client->touch_id;
 		if (touch_id < 0)
-			return -EINVAL;
+			return -1;
 		panel = &touch_panel_data[touch_id];
+		if (!panel->registered)
+			return -1;
 		index = atomic_read(&client->frame_data_index);
 		if (index == atomic_read(&panel->frame_data_index))
 			return -1;
@@ -975,12 +943,14 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 	case RAW_DATA_INDEX:
 		touch_id = client->touch_id;
 		if (touch_id < 0)
-			return -EINVAL;
+			return -1;
 		panel = &touch_panel_data[touch_id];
+		if (!panel->registered)
+			return -1;
 		if (_IOC_DIR(cmd) == _IOC_READ) {
 			index = atomic_read(&client->raw_data_index);
 			if (index == atomic_read(&panel->raw_data_index))
-				return -EAGAIN;
+				return -1;
 			ret = index;
 			if (++index >= panel->raw_data_buf_size)
 				index = 0;
@@ -2462,30 +2432,28 @@ static ssize_t fod_test_store(struct device *dev,
 static ssize_t fod_attn_test_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
-	int value;
+	int value = 0;
 	struct xiaomi_touch_panel_data *panel = &touch_panel_data[0];
 
-	if (!panel->registered || !panel->hardware_operation.fod_attn_test)
-		return -EOPNOTSUPP;
-	if (kstrtoint(buf, 10, &value))
+	if (sscanf(buf, "%d", &value) < 0)
 		return -EINVAL;
 
-	panel->hardware_operation.fod_attn_test(value);
+	if (panel->registered && panel->hardware_operation.fod_attn_test)
+		panel->hardware_operation.fod_attn_test(value);
 	return count;
 }
 
 static ssize_t fod_low_attn_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
-	int value;
+	int value = 0;
 	struct xiaomi_touch_panel_data *panel = &touch_panel_data[0];
 
-	if (!panel->registered || !panel->hardware_operation.fod_low_attn)
-		return -EOPNOTSUPP;
-	if (kstrtoint(buf, 10, &value))
+	if (sscanf(buf, "%d", &value) < 0)
 		return -EINVAL;
 
-	panel->hardware_operation.fod_low_attn(value);
+	if (panel->registered && panel->hardware_operation.fod_low_attn)
+		panel->hardware_operation.fod_low_attn(value);
 	return count;
 }
 /*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 start*/
