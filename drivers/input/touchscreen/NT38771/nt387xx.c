@@ -3769,6 +3769,11 @@ static int nvt_set_thp_cur_value(int mode, int *values)
 
 	if (!ts || !values)
 		return -ENODEV;
+	if (mode == THP_REPORT_POINT_SWITCH) {
+		if (values[0] >= 0)
+			ts->touch_raw_enabled = !!values[0];
+		return 0;
+	}
 	if (mode == THP_HAL_REPORT_RATE) {
 		if (values[0] < 0)
 			return 0;
@@ -5670,14 +5675,11 @@ static int nvt_ts_pm_suspend(struct device *dev)
 {
 	int ret;
 
-	if (device_may_wakeup(dev) && ts->gesture_command &&
-	    !ts->irq_wake_enabled) {
+	if (device_may_wakeup(dev) && ts->gesture_command) {
 		ret = enable_irq_wake(ts->client->irq);
 		if (ret)
 			NVT_ERR("enable_irq_wake(irq:%d) failed: %d\n",
 				ts->client->irq, ret);
-		else
-			ts->irq_wake_enabled = true;
 	}
 
 	ts->dev_pm_suspend = true;
@@ -5690,13 +5692,11 @@ static int nvt_ts_pm_resume(struct device *dev)
 {
 	int ret;
 
-	if (ts->irq_wake_enabled) {
+	if (device_may_wakeup(dev) && ts->gesture_command) {
 		ret = disable_irq_wake(ts->client->irq);
 		if (ret)
 			NVT_ERR("disable_irq_wake(irq:%d) failed: %d\n",
 				ts->client->irq, ret);
-		else
-			ts->irq_wake_enabled = false;
 	}
 
 	ts->dev_pm_suspend = false;

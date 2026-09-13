@@ -337,7 +337,6 @@ struct nvt_ts_data {
 #endif
 #if NVT_PM_WAIT_BUS_RESUME_COMPLETE
 	bool dev_pm_suspend;
-	bool irq_wake_enabled;
 	struct completion dev_pm_resume_completion;
 #endif
 	bool display_suspend_ready;
