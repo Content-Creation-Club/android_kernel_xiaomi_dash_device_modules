@@ -54,7 +54,7 @@
 #define TOUCH_FOD_SUPPORT 1
 #define FOD_TEST_BASE 10
 extern int current_log_level;
-#define mi_ts_info(fmt, arg...) do { if (READ_ONCE(current_log_level) > 2) pr_info("[MI_TP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
+#define mi_ts_info(fmt, arg...) do { if ((unsigned int)READ_ONCE(current_log_level) > 2) pr_info("[MI_TP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
 #define mi_ts_err(fmt, arg...) do { if (READ_ONCE(current_log_level) != 0) pr_err("[MI_TP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
 #define XIAOMI_TOUCH_UTC_PRINT(tag) \
 	do { \

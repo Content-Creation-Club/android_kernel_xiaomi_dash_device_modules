@@ -2318,7 +2318,9 @@ static ssize_t touch_thp_ic_cmd_store(struct device *dev,
 		length = n - 3;
 		if (input[n - 1] != length)
 			return -EINVAL;
+		mutex_lock(&touch_callback_lock);
 		add_common_data_to_buf(0, input[0], input[1], length, input + 2);
+		mutex_unlock(&touch_callback_lock);
 		return count;
 	}
 
@@ -2329,7 +2331,9 @@ static ssize_t touch_thp_ic_cmd_store(struct device *dev,
 	    (input[1] != SET_TOUCH_IC_INFO && length != 2) ||
 	    length < 0 || length > CMD_DATA_BUF_SIZE - 2)
 		return -EINVAL;
+	mutex_lock(&touch_callback_lock);
 	add_common_data_to_buf(0, input[0], input[1], length, input + 2);
+	mutex_unlock(&touch_callback_lock);
 	return count;
 }
 
