@@ -261,6 +261,13 @@ struct xiaomi_touch_panel_data {
 	struct notifier_block panel_notifier;
 	struct workqueue_struct *pm_wq;
 	struct work_struct resume_work;
+	struct workqueue_struct *mode_wq;
+	struct work_struct cmd_work;
+	struct work_struct switch_work;
+	struct work_struct grid_work;
+	int touch_mode[Touch_Mode_NUM][VALUE_TYPE_SIZE];
+	int grid_value[CMD_DATA_BUF_SIZE];
+	int grid_length;
 	struct mutex pm_lock;
 	struct mutex proc_lock;
 	struct proc_dir_entry *info_proc[3];
@@ -299,7 +306,10 @@ extern int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interf
 extern int register_touch_panel_common(struct device *dev, int touch_id,
 		const hardware_param_t *hardware_param,
 		const hardware_operation_t *hardware_operation);
+/* Stop callbacks first; unregister releases backing after the producer stops. */
+extern void xiaomi_touch_stop_panel_common(int touch_id);
 extern void unregister_touch_panel_common(int touch_id);
+extern int driver_get_touch_mode_common(int touch_id, int mode);
 extern void xiaomi_touch_remove_info_proc_common(int touch_id);
 extern int get_bms_temp_common(void);
 extern void enable_temperature_detection_func(bool enable);

@@ -239,7 +239,7 @@ typedef struct hardware_operation {
 	int (*set_cur_value)(int mode, int *values);
 	void (*reserved_28[3])(void);
 	void (*switch_mode)(void);
-	void (*cmd_mode_update)(void);
+	void (*cmd_mode_update)(u64 changed, int *snapshot);
 	void (*reserved_50[2])(void);
 	int (*enable_touch_raw)(int value);
 	void (*panel_vendor_read)(void);

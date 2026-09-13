@@ -24,6 +24,14 @@ struct sock *nl_sk;
 static struct xiaomi_touch_pdata *touch_pdata;
 static struct xiaomi_touch *xiaomi_touch_device;
 static struct xiaomi_touch_panel_data touch_panel_data[XIAOMI_TOUCH_MAX_PANEL];
+/* Callback lifetime and mode data use separate locks: NVT callbacks read getters.
+ * Lock order is callback -> mode; never drain work while holding either lock.
+ */
+/* ponytail: serialize both panels; split locks if dual-panel contention matters. */
+static DEFINE_MUTEX(touch_callback_lock);
+static DEFINE_MUTEX(touch_mode_lock);
+/* Only stop/unregister take this lock; workers and getters never do. */
+static DEFINE_MUTEX(touch_lifecycle_lock);
 static common_data_t thp_ic_cmd_data_common_data;
 static DEFINE_MUTEX(thp_ic_read_data_mutex);
 static DEFINE_MUTEX(thp_ic_write_data_mutex);
@@ -460,6 +468,236 @@ static int xiaomi_touch_create_info_proc(struct xiaomi_touch_panel_data *panel,
 	return 0;
 }
 
+static void xiaomi_touch_init_modes(struct xiaomi_touch_panel_data *panel,
+				    struct device_node *np)
+{
+	static const char * const properties[Touch_Report_Rate + 1] = {
+		[Touch_Game_Mode] = "mi_tp,game-mode-array",
+		[Touch_Active_MODE] = "mi_tp,active-mode-array",
+		[Touch_UP_THRESHOLD] = "mi_tp,up-threshold-array",
+		[Touch_Tolerance] = "mi_tp,tolerance-array",
+		[Touch_Aim_Sensitivity] = "mi_tp,aim-sensitivity-array",
+		[Touch_Tap_Stability] = "mi_tp,tap-stability-array",
+		[Touch_Edge_Filter] = "mi_tp,edge-filter-array",
+		[Touch_Panel_Orientation] = "mi_tp,panel-orien-array",
+		[Touch_Report_Rate] = "mi_tp,report-rate-array",
+	};
+	u32 values[5];
+	int i;
+
+	memset(panel->touch_mode, 0, sizeof(panel->touch_mode));
+	memset(panel->grid_value, 0, sizeof(panel->grid_value));
+	panel->grid_length = 0;
+	/* Stock parses expert parameters but never initializes mode 6 from them. */
+	for (i = 0; i < ARRAY_SIZE(properties); i++) {
+		if (!properties[i] ||
+		    of_property_read_u32_array(np, properties[i], values, 5))
+			continue;
+		panel->touch_mode[i][GET_MAX_VALUE] = values[0];
+		panel->touch_mode[i][GET_MIN_VALUE] = values[1];
+		panel->touch_mode[i][GET_DEF_VALUE] = values[2];
+		panel->touch_mode[i][SET_CUR_VALUE] = values[3];
+		panel->touch_mode[i][GET_CUR_VALUE] = values[4];
+	}
+}
+
+int driver_get_touch_mode_common(int touch_id, int mode)
+{
+	int value = -1;
+
+	if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL ||
+	    mode < 0 || mode >= Touch_Mode_NUM)
+		return value;
+	mutex_lock(&touch_mode_lock);
+	if (touch_panel_data[touch_id].registered)
+		value = touch_panel_data[touch_id].touch_mode[mode][GET_CUR_VALUE];
+	mutex_unlock(&touch_mode_lock);
+	return value;
+}
+EXPORT_SYMBOL_GPL(driver_get_touch_mode_common);
+
+static void xiaomi_touch_get_mode(struct xiaomi_touch_panel_data *panel,
+				  common_data_t *data)
+{
+	if (data->mode >= Touch_Mode_NUM)
+		return;
+	mutex_lock(&touch_mode_lock);
+	if (data->cmd == GET_MODE_VALUE)
+		memcpy(data->data_buf, &panel->touch_mode[data->mode][GET_CUR_VALUE],
+		       4 * sizeof(int));
+	else
+		data->data_buf[0] = panel->touch_mode[data->mode][data->cmd];
+	mutex_unlock(&touch_mode_lock);
+}
+
+static void xiaomi_touch_grid_work(struct work_struct *work)
+{
+	struct xiaomi_touch_panel_data *panel = container_of(work,
+			struct xiaomi_touch_panel_data, grid_work);
+
+	mutex_lock(&touch_callback_lock);
+	/* Stock dash has no operation +0x50. Keep the fixed payload and work
+	 * contract, but do not invent a grid writer or DT region conversion.
+	 */
+	if (panel->registered && panel->hardware_operation.reserved_50[0])
+		mi_ts_err("grid provider is not implemented for this device");
+	mutex_unlock(&touch_callback_lock);
+}
+
+static void xiaomi_touch_cmd_work(struct work_struct *work)
+{
+	struct xiaomi_touch_panel_data *panel = container_of(work,
+			struct xiaomi_touch_panel_data, cmd_work);
+	int snapshot[Touch_Mode_NUM];
+	u64 changed = 0;
+	int i;
+
+	mutex_lock(&touch_callback_lock);
+	if (!panel->registered)
+		goto out;
+	mutex_lock(&touch_mode_lock);
+	for (i = 0; i < Touch_Mode_NUM; i++) {
+		int *mode = panel->touch_mode[i];
+
+		if (i <= Touch_Panel_Orientation) {
+			if (mode[SET_CUR_VALUE] > mode[GET_MAX_VALUE])
+				mode[SET_CUR_VALUE] = mode[GET_MAX_VALUE];
+			else if (mode[SET_CUR_VALUE] < mode[GET_MIN_VALUE])
+				mode[SET_CUR_VALUE] = mode[GET_MIN_VALUE];
+		}
+		if (mode[GET_CUR_VALUE] != mode[SET_CUR_VALUE]) {
+			mode[GET_CUR_VALUE] = mode[SET_CUR_VALUE];
+			changed |= BIT_ULL(i);
+		}
+		snapshot[i] = mode[GET_CUR_VALUE];
+	}
+	mutex_unlock(&touch_mode_lock);
+	if (changed && panel->hardware_operation.cmd_mode_update)
+		panel->hardware_operation.cmd_mode_update(changed, snapshot);
+	if (changed & (BIT_ULL(Touch_Game_Mode) | BIT_ULL(Touch_Edge_Filter) |
+		       BIT_ULL(Touch_Panel_Orientation)))
+		queue_work(panel->mode_wq, &panel->grid_work);
+out:
+	mutex_unlock(&touch_callback_lock);
+}
+
+static void xiaomi_touch_switch_work(struct work_struct *work)
+{
+	struct xiaomi_touch_panel_data *panel = container_of(work,
+			struct xiaomi_touch_panel_data, switch_work);
+
+	mutex_lock(&touch_callback_lock);
+	if (panel->registered && panel->hardware_operation.switch_mode)
+		panel->hardware_operation.switch_mode();
+	mutex_unlock(&touch_callback_lock);
+}
+
+/* Caller holds touch_callback_lock, including the queue operation. */
+static void xiaomi_touch_set_mode(struct xiaomi_touch_panel_data *panel,
+				 int touch_id, int mode, int *values)
+{
+	int notification;
+
+	if (mode < 0 || values[0] < 0 || !panel->registered)
+		return;
+	if (mode >= Touch_Mode_NUM) {
+		if (panel->hardware_operation.set_cur_value)
+			panel->hardware_operation.set_cur_value(mode, values);
+		return;
+	}
+	mutex_lock(&touch_mode_lock);
+	panel->touch_mode[mode][SET_CUR_VALUE] = values[0];
+	switch (mode) {
+	case Touch_Fod_Enable:
+	case Touch_Aod_Enable:
+	case Touch_Doubletap_Mode:
+	case Touch_FodIcon_Enable:
+	case Touch_Nonui_Mode:
+	case Touch_Debug_Level:
+	case Touch_Power_Status:
+		panel->touch_mode[mode][GET_CUR_VALUE] = values[0];
+		break;
+	}
+	mutex_unlock(&touch_mode_lock);
+
+	switch (mode) {
+	case Touch_Game_Mode:
+	case Touch_UP_THRESHOLD:
+	case Touch_Tolerance:
+	case Touch_Aim_Sensitivity:
+	case Touch_Tap_Stability:
+	case Touch_Edge_Filter:
+	case Touch_Panel_Orientation:
+		queue_work(panel->mode_wq, &panel->cmd_work);
+		break;
+	case Touch_Fod_Enable:
+	case Touch_Aod_Enable:
+	case Touch_Doubletap_Mode:
+	case Touch_FodIcon_Enable:
+	case Touch_Nonui_Mode:
+		queue_work(panel->mode_wq, &panel->switch_work);
+		break;
+	case Touch_Fod_Setting:
+	case Touch_Fingerprint_Auth_State:
+		if (panel->hardware_operation.set_cur_value)
+			panel->hardware_operation.set_cur_value(mode, values);
+		break;
+	case 31:
+		notification = values[0] ? 100 : 101;
+		add_common_data_to_buf(touch_id, SET_CUR_VALUE, Touch_Suspend,
+				       1, &notification);
+		break;
+	case Touch_Debug_Level:
+	case Touch_Power_Status:
+		/* Follow-up batches own log gating and the common PM scheduler.
+		 * These are cached requests, not hardware acknowledgements.
+		 */
+		mi_ts_err("mode %d cached; common log/PM action not implemented", mode);
+		break;
+	default:
+		/* Stock retains requested; a later cmd work may commit it. */
+		break;
+	}
+}
+
+static void xiaomi_touch_reset_mode(struct xiaomi_touch_panel_data *panel,
+				   int touch_id, int mode)
+{
+	int values[CMD_DATA_BUF_SIZE] = { 0 };
+	int i;
+
+	if (mode < 0 || mode >= Touch_Mode_NUM)
+		return;
+	if (mode) {
+		mutex_lock(&touch_mode_lock);
+		values[0] = panel->touch_mode[mode][GET_DEF_VALUE];
+		mutex_unlock(&touch_mode_lock);
+		xiaomi_touch_set_mode(panel, touch_id, mode, values);
+		return;
+	}
+	/* Deliberately keep the existing game-only reset, not stock's broken
+	 * 42-iteration fixed-address loop. Do not reset FOD or PM requests.
+	 */
+	mutex_lock(&touch_mode_lock);
+	for (i = 0; i <= Touch_Report_Rate; i++)
+		panel->touch_mode[i][SET_CUR_VALUE] = panel->touch_mode[i]
+			[i == Touch_Panel_Orientation ? GET_CUR_VALUE : GET_DEF_VALUE];
+	mutex_unlock(&touch_mode_lock);
+	queue_work(panel->mode_wq, &panel->cmd_work);
+}
+
+static void xiaomi_touch_set_long_mode(struct xiaomi_touch_panel_data *panel,
+				      common_data_t *data)
+{
+	if (data->mode != Touch_Grip_Mode || !data->data_len ||
+	    data->data_len > CMD_DATA_BUF_SIZE)
+		return;
+	/* The ioctl copied the entire fixed payload, even when data_len is 96. */
+	memcpy(panel->grid_value, data->data_buf, sizeof(panel->grid_value));
+	panel->grid_length = data->data_len;
+	queue_work(panel->mode_wq, &panel->grid_work);
+}
+
 int register_touch_panel_common(struct device *dev, int touch_id,
 		const hardware_param_t *hardware_param,
 		const hardware_operation_t *hardware_operation)
@@ -468,12 +706,12 @@ int register_touch_panel_common(struct device *dev, int touch_id,
 	size_t frame_total;
 	size_t raw_total;
 
-	(void)dev;
-	if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL || !hardware_param)
+	if (!dev || !dev->of_node ||
+	    touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL || !hardware_param)
 		return -EINVAL;
 
 	panel = &touch_panel_data[touch_id];
-	if (panel->registered)
+	if (panel->registered || panel->frame_data)
 		return -EBUSY;
 
 	if (!hardware_param->frame_data_page_size ||
@@ -523,9 +761,27 @@ int register_touch_panel_common(struct device *dev, int touch_id,
 	memset(panel->limit_version, 0, sizeof(panel->limit_version));
 	panel->info_result_len = 0;
 	panel->self_test_result = 0;
-	panel->registered = true;
+	INIT_WORK(&panel->cmd_work, xiaomi_touch_cmd_work);
+	INIT_WORK(&panel->switch_work, xiaomi_touch_switch_work);
+	INIT_WORK(&panel->grid_work, xiaomi_touch_grid_work);
+	panel->mode_wq = alloc_ordered_workqueue("xiaomi_touch_mode_%d",
+			WQ_MEM_RECLAIM, touch_id);
+	if (!panel->mode_wq) {
+		kfree(panel->raw_data);
+		kfree(panel->frame_data);
+		panel->raw_data = NULL;
+		panel->frame_data = NULL;
+		memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
+		return -ENOMEM;
+	}
 	init_waitqueue_head(&panel->temp_wait);
 	panel->temp_enabled = true;
+	mutex_lock(&touch_callback_lock);
+	mutex_lock(&touch_mode_lock);
+	xiaomi_touch_init_modes(panel, dev->of_node);
+	WRITE_ONCE(panel->registered, true);
+	mutex_unlock(&touch_mode_lock);
+	mutex_unlock(&touch_callback_lock);
 	if (xiaomi_touch_create_info_proc(panel, touch_id)) {
 		unregister_touch_panel_common(touch_id);
 		return -ENOMEM;
@@ -561,7 +817,7 @@ void xiaomi_touch_remove_info_proc_common(int touch_id)
 }
 EXPORT_SYMBOL_GPL(xiaomi_touch_remove_info_proc_common);
 
-void unregister_touch_panel_common(int touch_id)
+static void xiaomi_touch_stop_panel(int touch_id)
 {
 	struct xiaomi_touch_panel_data *panel;
 	struct xiaomi_touch_client *client;
@@ -572,8 +828,36 @@ void unregister_touch_panel_common(int touch_id)
 		return;
 
 	panel = &touch_panel_data[touch_id];
-	if (!panel->registered)
+	mutex_lock(&touch_callback_lock);
+	if (!panel->registered) {
+		mutex_unlock(&touch_callback_lock);
 		return;
+	}
+	/* Close requests and wait for in-flight ioctl/work/sysfs callbacks.
+	 * The getter remains usable without taking touch_callback_lock.
+	 */
+	mutex_lock(&touch_mode_lock);
+	WRITE_ONCE(panel->registered, false);
+	mutex_unlock(&touch_mode_lock);
+	panel->hardware_operation.cmd_mode_update = NULL;
+	panel->hardware_operation.switch_mode = NULL;
+	if (touch_pdata && touch_pdata->touch_data[touch_id]) {
+		struct xiaomi_touch_interface *data = touch_pdata->touch_data[touch_id];
+
+		/* Withdraw the contiguous callback section, not its live locks/data. */
+		memset(&data->setModeValue, 0,
+		       offsetof(struct xiaomi_touch_interface, long_mode_len) -
+		       offsetof(struct xiaomi_touch_interface, setModeValue));
+#if IS_ENABLED(CONFIG_MIEV)
+		data->touch_dfs_test = NULL;
+#endif
+	}
+	mutex_unlock(&touch_callback_lock);
+	cancel_work_sync(&panel->cmd_work);
+	cancel_work_sync(&panel->switch_work);
+	cancel_work_sync(&panel->grid_work);
+	destroy_workqueue(panel->mode_wq);
+	panel->mode_wq = NULL;
 	xiaomi_touch_remove_info_proc_common(touch_id);
 	xiaomi_unregister_panel_notifier_common(touch_id);
 	if (touch_id == 0)
@@ -584,14 +868,36 @@ void unregister_touch_panel_common(int touch_id)
 		client->touch_id = -1;
 		wake_up_all(&client->poll_wait_queue_head);
 	}
-	panel->registered = false;
 	spin_unlock_irqrestore(&panel->client_lock, flags);
 
+	mutex_lock(&touch_callback_lock);
+	memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
+	mutex_unlock(&touch_callback_lock);
+}
+
+void xiaomi_touch_stop_panel_common(int touch_id)
+{
+	mutex_lock(&touch_lifecycle_lock);
+	xiaomi_touch_stop_panel(touch_id);
+	mutex_unlock(&touch_lifecycle_lock);
+}
+EXPORT_SYMBOL_GPL(xiaomi_touch_stop_panel_common);
+
+void unregister_touch_panel_common(int touch_id)
+{
+	struct xiaomi_touch_panel_data *panel;
+
+	if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL)
+		return;
+	mutex_lock(&touch_lifecycle_lock);
+	xiaomi_touch_stop_panel(touch_id);
+	panel = &touch_panel_data[touch_id];
+	/* The provider must stop its raw producer before releasing backing. */
 	kfree(panel->raw_data);
 	kfree(panel->frame_data);
 	panel->raw_data = NULL;
 	panel->frame_data = NULL;
-	memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
+	mutex_unlock(&touch_lifecycle_lock);
 }
 EXPORT_SYMBOL_GPL(unregister_touch_panel_common);
 
@@ -771,7 +1077,6 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 {
 	struct xiaomi_touch_client *client = file->private_data;
 	struct xiaomi_touch_panel_data *panel;
-	struct xiaomi_touch_interface *touch_data;
 	common_data_t common_data;
 	void __user *argp = (void __user *)arg;
 	unsigned long flags;
@@ -796,10 +1101,15 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 			return -1;
 		if (common_data.data_len > CMD_DATA_BUF_SIZE)
 			return -EINVAL;
-		touch_data = touch_pdata->touch_data[touch_id];
 		panel = &touch_panel_data[touch_id];
 
 		mutex_lock(&touch_pdata->device->mutex);
+		mutex_lock(&touch_callback_lock);
+		if (!panel->registered) {
+			mutex_unlock(&touch_callback_lock);
+			mutex_unlock(&touch_pdata->device->mutex);
+			return -1;
+		}
 		switch (common_data.cmd) {
 		case SET_CUR_VALUE:
 			if (common_data.data_buf[0] < 0)
@@ -811,37 +1121,21 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 				break;
 			}
 			/* Stock keeps the request payload, not the callback status. */
-			if (common_data.mode < Touch_Mode_NUM) {
-				if (touch_data->setModeValue)
-					touch_data->setModeValue(common_data.mode,
-						common_data.data_buf[0]);
-			} else if (panel->hardware_operation.set_cur_value) {
-				panel->hardware_operation.set_cur_value(common_data.mode,
-						common_data.data_buf);
-			}
+			xiaomi_touch_set_mode(panel, touch_id, common_data.mode,
+					      common_data.data_buf);
 			break;
 		case GET_CUR_VALUE:
 		case GET_DEF_VALUE:
 		case GET_MIN_VALUE:
 		case GET_MAX_VALUE:
-			if (common_data.mode < Touch_Mode_NUM && touch_data->getModeValue)
-				common_data.data_buf[0] =
-					touch_data->getModeValue(common_data.mode,
-						common_data.cmd);
-			break;
 		case GET_MODE_VALUE:
-			if (common_data.mode < Touch_Mode_NUM && touch_data->getModeAll)
-				touch_data->getModeAll(common_data.mode,
-						common_data.data_buf);
+			xiaomi_touch_get_mode(panel, &common_data);
 			break;
 		case RESET_MODE:
-			if (touch_data->resetMode)
-				touch_data->resetMode(common_data.mode);
+			xiaomi_touch_reset_mode(panel, touch_id, common_data.mode);
 			break;
 		case SET_LONG_VALUE:
-			if (touch_data->setModeLongValue)
-				touch_data->setModeLongValue(common_data.mode,
-						common_data.data_len, common_data.data_buf);
+			xiaomi_touch_set_long_mode(panel, &common_data);
 			break;
 		case SET_THP_IC_CUR_VALUE:
 			if (panel->hardware_operation.htc_ic_set_mode_value)
@@ -885,6 +1179,7 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 			add_common_data_to_buf(touch_id, common_data.cmd,
 					       common_data.mode, common_data.data_len,
 					       common_data.data_buf);
+		mutex_unlock(&touch_callback_lock);
 		mutex_unlock(&touch_pdata->device->mutex);
 		return ret;
 
@@ -911,8 +1206,11 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 			return -1;
 		touch_id = arg;
 		panel = &touch_panel_data[touch_id];
-		if (!panel->registered)
+		mutex_lock(&touch_callback_lock);
+		if (!panel->registered) {
+			mutex_unlock(&touch_callback_lock);
 			return -1;
+		}
 
 		client->touch_id = touch_id;
 		atomic_set(&client->frame_data_index,
@@ -922,6 +1220,7 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 		spin_lock_irqsave(&panel->client_lock, flags);
 		list_add_tail(&client->node, &panel->client_list);
 		spin_unlock_irqrestore(&panel->client_lock, flags);
+		mutex_unlock(&touch_callback_lock);
 		return 0;
 
 	case GET_FRAME_DATA_INDEX:
@@ -1083,6 +1382,8 @@ int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *da
 {
 	int ret = 0;
 	struct xiaomi_touch_interface *touch_data = NULL;
+	if (!data || touchId < 0 || touchId >= XIAOMI_TOUCH_MAX_PANEL)
+		return -EINVAL;
 	if (!touch_pdata){
 		mi_ts_info("touch_pdata is null\n");
 		ret = -ENOMEM;
@@ -1091,6 +1392,12 @@ int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *da
 	touch_data = touch_pdata->touch_data[touchId];
 	mi_ts_info("enter\n");
 	mutex_lock(&xiaomi_touch_dev.mutex);
+	mutex_lock(&touch_callback_lock);
+	if (!touch_panel_data[touchId].registered) {
+		mutex_unlock(&touch_callback_lock);
+		mutex_unlock(&xiaomi_touch_dev.mutex);
+		return -ENODEV;
+	}
 	if (data->setModeValue)
 		touch_data->setModeValue = data->setModeValue;
 	if (data->getModeValue)
@@ -1147,6 +1454,7 @@ int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *da
 	if (data->touch_dfs_test)
 		touch_data->touch_dfs_test = data->touch_dfs_test;
 /*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 end*/
+	mutex_unlock(&touch_callback_lock);
 	mutex_unlock(&xiaomi_touch_dev.mutex);
 	return ret;
 }
@@ -1186,10 +1494,12 @@ static ssize_t palm_sensor_store(struct device *dev,
 	if (sscanf(buf, "%d", &input) < 0)
 		return -EINVAL;
 	pdata->touch_data[0]->palm_sensor_onoff = input;
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->palm_sensor_write)
 		pdata->touch_data[0]->palm_sensor_write(!!input);
 	else
 		mi_ts_err("has not implement\n");
+	mutex_unlock(&touch_callback_lock);
 	mi_ts_info("value:%d\n", !!input);
 	sysfs_notify(&xiaomi_touch_dev.dev->kobj, NULL, "palm_sensor_data");
 	return count;
@@ -1423,6 +1733,7 @@ static ssize_t touch_doze_analysis_store(struct device *dev,
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
 	if (sscanf(buf, "%d", &input) < 0)
 		return -EINVAL;
+	mutex_lock(&touch_callback_lock);
 	for (i = 0; i < ARRAY_SIZE(touch_panel_data); i++) {
 		if (touch_panel_data[i].registered &&
 		    touch_panel_data[i].hardware_operation.touch_doze_analysis)
@@ -1431,6 +1742,7 @@ static ssize_t touch_doze_analysis_store(struct device *dev,
 		else if (pdata->touch_data[i] && pdata->touch_data[i]->touch_doze_analysis)
 			touch_doze_analysis_result = pdata->touch_data[i]->touch_doze_analysis(input);
 	}
+	mutex_unlock(&touch_callback_lock);
 	mi_ts_info("value:%d\n", input);
 	return count;
 }
@@ -1438,37 +1750,49 @@ static ssize_t panel_vendor_show(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	ssize_t ret = 0;
+
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->panel_vendor_read)
-		return snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->panel_vendor_read());
-	else
-		return 0;
+		ret = snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->panel_vendor_read());
+	mutex_unlock(&touch_callback_lock);
+	return ret;
 }
 static ssize_t panel_color_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	ssize_t ret = 0;
+
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->panel_color_read)
-		return snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->panel_color_read());
-	else
-		return 0;
+		ret = snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->panel_color_read());
+	mutex_unlock(&touch_callback_lock);
+	return ret;
 }
 static ssize_t panel_display_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	ssize_t ret = 0;
+
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->panel_display_read)
-		return snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->panel_display_read());
-	else
-		return 0;
+		ret = snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->panel_display_read());
+	mutex_unlock(&touch_callback_lock);
+	return ret;
 }
 static ssize_t touch_vendor_show(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	ssize_t ret = 0;
+
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->touch_vendor_read)
-		return snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->touch_vendor_read());
-	else
-		return 0;
+		ret = snprintf(buf, PAGE_SIZE, "%c", pdata->touch_data[0]->touch_vendor_read());
+	mutex_unlock(&touch_callback_lock);
+	return ret;
 }
 static ssize_t xiaomi_touch_tx_num_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -1578,11 +1902,13 @@ static ssize_t enable_touchraw_store(struct device *dev,
 	if (sscanf(buf, "%d", &input) < 0)
 		return -EINVAL;
 	mi_ts_info("%d\n", input);
+	mutex_lock(&touch_callback_lock);
 	if (touch_panel_data[0].registered &&
 	    touch_panel_data[0].hardware_operation.enable_touch_raw)
 		touch_panel_data[0].hardware_operation.enable_touch_raw(input);
 	else if (touch_data->enable_touch_raw)
 		touch_data->enable_touch_raw(!!input);
+	mutex_unlock(&touch_callback_lock);
 	touch_data->is_enable_touchraw = !!input;
 	touch_pdata->raw_tail = 0;
 	touch_pdata->raw_head = 0;
@@ -2420,11 +2746,13 @@ static ssize_t fod_test_store(struct device *dev,
 	pr_info("%s,buf:%s,count:%zu\n", __func__, buf, count);
 	if (kstrtoint(buf, FOD_TEST_BASE, &value))
 		return -ENODEV;
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->fod_test_store)
 		pdata->touch_data[0]->fod_test_store(value);
 	else {
 		pr_err("%s has not implement\n", __func__);
 	}
+	mutex_unlock(&touch_callback_lock);
 	pr_info("%s value:%d\n", __func__, value);
 	return count;
 }
@@ -2438,8 +2766,10 @@ static ssize_t fod_attn_test_store(struct device *dev,
 	if (sscanf(buf, "%d", &value) < 0)
 		return -EINVAL;
 
+	mutex_lock(&touch_callback_lock);
 	if (panel->registered && panel->hardware_operation.fod_attn_test)
 		panel->hardware_operation.fod_attn_test(value);
+	mutex_unlock(&touch_callback_lock);
 	return count;
 }
 
@@ -2452,8 +2782,10 @@ static ssize_t fod_low_attn_store(struct device *dev,
 	if (sscanf(buf, "%d", &value) < 0)
 		return -EINVAL;
 
+	mutex_lock(&touch_callback_lock);
 	if (panel->registered && panel->hardware_operation.fod_low_attn)
 		panel->hardware_operation.fod_low_attn(value);
+	mutex_unlock(&touch_callback_lock);
 	return count;
 }
 /*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 start*/
@@ -2467,11 +2799,13 @@ static ssize_t touch_dfs_test_store(struct device *dev,struct device_attribute *
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
 	if (sscanf(buf, "%d", &input) < 0)
 		return -EINVAL;
+	mutex_lock(&touch_callback_lock);
 	if (pdata->touch_data[0]->touch_dfs_test)
 		pdata->touch_data[0]->touch_dfs_test(input);
 	else {
 		pr_err("%s has not touch_dfs_test\n", __func__);
 	}
+	mutex_unlock(&touch_callback_lock);
 	pr_info("%s value:%d\n", __func__, input);
 	return count;
 }
@@ -2974,7 +3308,9 @@ static int xiaomi_touch_remove(struct platform_device *pdev)
 {
 	int i;
 	xiaomi_touch_probe_finished = false;
-	stop_temperature_detection_func();
+	/* Keep raw backing until the provider has stopped its producer. */
+	for (i = 0; i < XIAOMI_TOUCH_MAX_PANEL; i++)
+		xiaomi_touch_stop_panel_common(i);
 	netlink_exit();
 	sysfs_remove_group(&xiaomi_touch_dev.dev->kobj, &xiaomi_touch_dev.attrs);
 	device_destroy(xiaomi_touch_dev.class, 'T');

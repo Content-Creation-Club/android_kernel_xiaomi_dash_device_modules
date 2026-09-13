@@ -348,15 +348,9 @@ struct nvt_ts_data {
 	uint32_t pre_fw_input_y[TOUCH_MAX_FINGER_NUM];
 #endif
 /* P16 code for HQFEAT-94432 by p-liaoxianguo at 2025/4/29 start */
-	int fod_value;
-	int aod_value;
-	int doubletap_value;
 /*P16 code for BUGP16-5788 by xiongdejun at 2025/6/18 start*/
 	int fod_setting;
 /*P16 code for BUGP16-5788 by xiongdejun at 2025/6/18 end*/
-/* P16 code for BUGP16-3861 by p-liaoxianguo at 2025/5/26 start */
-	int fodicon_value;
-/* P16 code for BUGP16-3861 by p-liaoxianguo at 2025/5/26 end */
 /*P16 code for BUGP16-2768 by xiongdejun at 2025/5/26 start*/
 	int ic_state;
 	int gesture_command_delay;
