@@ -8,6 +8,7 @@
 #include <linux/kthread.h>
 #include <linux/power_supply.h>
 #include <linux/types.h>
+#include <asm/unaligned.h>
 #include <net/sock.h>
 #include <net/netlink.h>
 #include "xiaomi_touch_common.h"
@@ -38,6 +39,9 @@ static DEFINE_MUTEX(thp_ic_write_data_mutex);
 static bool xiaomi_touch_probe_finished = false;
 #define RAW_SIZE (PAGE_SIZE * 12)
 
+int current_log_level = 3;
+static int vendor_log_level = 3;
+static u64 ic_buffer_addr;
 static int temperature_last = 1000;
 
 int get_bms_temp_common(void)
@@ -705,7 +709,7 @@ static void xiaomi_touch_set_mode(struct xiaomi_touch_panel_data *panel,
 		xiaomi_touch_request_pm(panel, !!values[0], true);
 		break;
 	case Touch_Debug_Level:
-		mi_ts_err("mode %d cached; common log action not implemented", mode);
+		WRITE_ONCE(current_log_level, values[0]);
 		break;
 	default:
 		/* Stock retains requested; a later cmd work may commit it. */
@@ -1794,21 +1798,54 @@ static ssize_t prox_sensor_store(struct device *dev,
 	mi_ts_info("value:%d\n", !!input);
 	return count;
 }
+static ssize_t touch_log_level_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf,
+		"echo [value0] [value1] > touch_log_level\n"
+		"[value0]: control xiaomi_touch log level, 0:Always,1:Error,2:Warning,3:Info,4:Debug,5:Verbose\n"
+		"[value1]: control vendor driver log level, 0:Always,1:Error,2:Warning,3:Info,4:Debug,5:Verbose\n"
+		"current xiaomi_touch log_level = %d, vendor log_level = %d\n",
+		READ_ONCE(current_log_level), READ_ONCE(vendor_log_level));
+}
+
+static ssize_t touch_log_level_store(struct device *dev,
+			struct device_attribute *attr, const char *buf, size_t count)
+{
+	int common = 0;
+
+	if (sscanf(buf, "%d %d", &common, &vendor_log_level) < 0)
+		return -EINVAL;
+	WRITE_ONCE(current_log_level, common);
+	return count;
+}
+
 static ssize_t touch_ic_buffer_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
 	ssize_t count = 0;
 	u8 *tmp_buf = NULL;
+
+	mi_ts_info("address: 0x%llx", (unsigned long long)ic_buffer_addr);
 	if (pdata->touch_data[0]->get_touch_ic_buffer) {
 		tmp_buf = pdata->touch_data[0]->get_touch_ic_buffer();
-		count = snprintf(buf, PAGE_SIZE, "%s", tmp_buf);
-	} else {
-		mi_ts_info("get touch ic buffer wrong");
+		if (tmp_buf)
+			count = snprintf(buf, PAGE_SIZE, "%s", tmp_buf);
 	}
 	if (tmp_buf)
 		vfree(tmp_buf);
-	tmp_buf = NULL;
+	return count;
+}
+
+static ssize_t touch_ic_buffer_store(struct device *dev,
+			struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long long address = READ_ONCE(ic_buffer_addr);
+
+	if (sscanf(buf, "0x%llX", &address) < 0)
+		return -EINVAL;
+	WRITE_ONCE(ic_buffer_addr, address);
 	return count;
 }
 static int touch_doze_analysis_result;
@@ -1999,9 +2036,9 @@ static ssize_t enable_touchraw_store(struct device *dev,
 	    touch_panel_data[0].hardware_operation.enable_touch_raw)
 		touch_panel_data[0].hardware_operation.enable_touch_raw(input);
 	else if (touch_data->enable_touch_raw)
-		touch_data->enable_touch_raw(!!input);
+		touch_data->enable_touch_raw(input);
 	mutex_unlock(&touch_callback_lock);
-	touch_data->is_enable_touchraw = !!input;
+	touch_data->is_enable_touchraw = input;
 	touch_pdata->raw_tail = 0;
 	touch_pdata->raw_head = 0;
 	return count;
@@ -2234,6 +2271,68 @@ static ssize_t thp_cmd_data_store(struct device *dev,
 	sysfs_notify(&xiaomi_touch_device->dev->kobj, NULL, "touch_thp_cmd_data");
 	return count;
 }
+static ssize_t touch_thp_ic_cmd_store(struct device *dev,
+			struct device_attribute *attr, const char *buf, size_t count)
+{
+	int input[CMD_DATA_BUF_SIZE] = { 0 };
+	unsigned int value = 0;
+	bool in_number = false;
+	int n = 0;
+	int length;
+	size_t i;
+
+	for (i = 0; i < count && buf[i]; i++) {
+		unsigned int digit;
+
+		if (buf[i] >= '0' && buf[i] <= '9') {
+			digit = buf[i] - '0';
+			if (!in_number) {
+				if (n == ARRAY_SIZE(input))
+					return -EINVAL;
+				value = 0;
+				in_number = true;
+			}
+			if (value > (INT_MAX - digit) / 10)
+				return -EINVAL;
+			value = value * 10 + digit;
+			input[n] = value;
+		} else if (buf[i] == ',' || buf[i] == ' ') {
+			if (in_number) {
+				n++;
+				in_number = false;
+			}
+		} else {
+			break;
+		}
+	}
+	if (in_number)
+		n++;
+
+	if ((input[0] != SET_THP_IC_CUR_VALUE &&
+	     input[0] != GET_THP_IC_CUR_VALUE) || n < 4 || n > CMD_DATA_BUF_SIZE)
+		return -EINVAL;
+
+	if (input[1] == SET_OPEN_TRANSPORT_MODE) {
+		if (input[0] != SET_THP_IC_CUR_VALUE)
+			return count;
+		length = n - 3;
+		if (input[n - 1] != length)
+			return -EINVAL;
+		add_common_data_to_buf(0, input[0], input[1], length, input + 2);
+		return count;
+	}
+
+	if (input[1] < 0)
+		return count;
+	length = input[3];
+	if (n != 4 || length == 1 ||
+	    (input[1] != SET_TOUCH_IC_INFO && length != 2) ||
+	    length < 0 || length > CMD_DATA_BUF_SIZE - 2)
+		return -EINVAL;
+	add_common_data_to_buf(0, input[0], input[1], length, input + 2);
+	return count;
+}
+
 static ssize_t touch_thp_ic_cmd_data_show(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
@@ -2252,6 +2351,29 @@ static ssize_t touch_thp_ic_cmd_data_show(struct device *dev,
 	if (thp_ic_cmd_data_common_data.mode < SET_IDLE_THD) {
 		memcpy(buf, thp_ic_cmd_data_common_data.data_buf, data_len);
 		count = data_len;
+	} else if (thp_ic_cmd_data_common_data.mode == SET_TOUCH_IC_INFO) {
+		u8 *data = (u8 *)thp_ic_cmd_data_common_data.data_buf;
+
+		count += sysfs_emit_at(buf, count, "protocol_version:    %u\n", get_unaligned_le16(data));
+		count += sysfs_emit_at(buf, count, "frame_len:    %u\n", get_unaligned_le16(data + 2));
+		count += sysfs_emit_at(buf, count, "ic_fw_v:    %u\n", get_unaligned_le16(data + 4));
+		count += sysfs_emit_at(buf, count, "ic_name:    %u\n", get_unaligned_le16(data + 6));
+		count += sysfs_emit_at(buf, count, "ic_project_name:    %u\n", get_unaligned_le16(data + 8));
+		count += sysfs_emit_at(buf, count, "ic_supplier_name:    %u\n", get_unaligned_le16(data + 10));
+		count += sysfs_emit_at(buf, count, "pitch_size_y:    %u\n", data[12]);
+		count += sysfs_emit_at(buf, count, "pitch_size_x:    %u\n", data[13]);
+		count += sysfs_emit_at(buf, count, "numCol:    %u\n", data[14]);
+		count += sysfs_emit_at(buf, count, "numRow:    %u\n", data[15]);
+		count += sysfs_emit_at(buf, count, "packaging_factory:    %u\n", get_unaligned_le16(data + 16));
+		count += sysfs_emit_at(buf, count, "wafe_factory:    %u\n", get_unaligned_le16(data + 18));
+		count += sysfs_emit_at(buf, count, "x_resolution:    %u\n", get_unaligned_le16(data + 20));
+		count += sysfs_emit_at(buf, count, "y_resolution:    %u\n", get_unaligned_le16(data + 22));
+		count += sysfs_emit_at(buf, count, "lockdown_info:    %llu\n",
+				       (unsigned long long)get_unaligned_le64(data + 24));
+		count += sysfs_emit_at(buf, count, "frame_data_type:    %u\n", data[32]);
+		count += sysfs_emit_at(buf, count, "mutual_len:    %u\n", get_unaligned_le16(data + 33));
+		count += sysfs_emit_at(buf, count, "slef1_len:    %u\n", get_unaligned_le16(data + 35));
+		count += sysfs_emit_at(buf, count, "slef2_len:    %u\n", get_unaligned_le16(data + 37));
 	} else {
 		for (i = 0; i < data_len && count < PAGE_SIZE; i++)
 			count += sysfs_emit_at(buf, count, "%x",
@@ -2727,7 +2849,7 @@ static ssize_t touch_finger_status_store(struct device *dev,
 			struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct xiaomi_touch_interface *touch_data = NULL;
-	unsigned int input;
+	int input = 0;
 	if (!touch_pdata) {
 		return -ENOMEM;
 	}
@@ -2738,11 +2860,6 @@ static ssize_t touch_finger_status_store(struct device *dev,
 		return count;
 	touch_data->finger_status = input;
 	sysfs_notify(&xiaomi_touch_dev.dev->kobj, NULL,  "touch_finger_status");
-	if (input != touch_pdata->touch_data[0]->active_status && input) {
-		touch_pdata->touch_data[0]->active_status = input;
-		sysfs_notify(&xiaomi_touch_dev.dev->kobj, NULL,
-				"touch_active_status");
-	}
 	return count;
 }
 static ssize_t touch_finger_status_show(struct device *dev,
@@ -2951,6 +3068,8 @@ static DEVICE_ATTR(abnormal_event, (S_IRUGO | S_IWUSR | S_IWGRP),
 			abnormal_event_show, abnormal_event_store);
 static DEVICE_ATTR(touch_thp_cmd_data, (S_IRUGO | S_IWUSR | S_IWGRP),
 			thp_cmd_data_show, thp_cmd_data_store);
+static DEVICE_ATTR(touch_thp_ic_cmd, (S_IRUGO | S_IWUSR | S_IWGRP),
+			NULL, touch_thp_ic_cmd_store);
 static DEVICE_ATTR(touch_thp_ic_cmd_data, (S_IRUGO | S_IWUSR | S_IWGRP),
 			touch_thp_ic_cmd_data_show, touch_thp_ic_cmd_data_store);
 static DEVICE_ATTR(touch_thp_cmd, (S_IRUGO | S_IWUSR | S_IWGRP),
@@ -3018,7 +3137,10 @@ static DEVICE_ATTR(touch_thp_testmode, (S_IRUGO | S_IWUSR | S_IWGRP), touch_test
 static DEVICE_ATTR(touch_thp_testresult, (S_IRUGO | S_IWUSR | S_IWGRP), touch_testresult_show, touch_testresult_store);
 static DEVICE_ATTR(touch_thp_preset_point, (S_IRUGO | S_IWUSR | S_IWGRP), touch_preset_point_show, touch_preset_point_store);
 static DEVICE_ATTR(resolution_factor, 0644, resolution_factor_show, NULL);
-static DEVICE_ATTR(touch_ic_buffer, (S_IRUGO | S_IWUSR | S_IWGRP),touch_ic_buffer_show, NULL);
+static DEVICE_ATTR(touch_log_level, (S_IRUGO | S_IWUSR | S_IWGRP),
+			touch_log_level_show, touch_log_level_store);
+static DEVICE_ATTR(touch_ic_buffer, (S_IRUGO | S_IWUSR | S_IWGRP),
+			touch_ic_buffer_show, touch_ic_buffer_store);
 static DEVICE_ATTR(fod_test, (S_IRUGO | S_IWUSR | S_IWGRP), NULL, fod_test_store);
 static DEVICE_ATTR(fod_attn_test, (S_IRUGO | S_IWUSR | S_IWGRP), NULL,
 			fod_attn_test_store);
@@ -3031,6 +3153,7 @@ static struct attribute *touch_attr_group[] = {
 	&dev_attr_enable_touch_delta.attr,
 	&dev_attr_touch_thp_cmd.attr,
 	&dev_attr_touch_thp_cmd_data.attr,
+	&dev_attr_touch_thp_ic_cmd.attr,
 	&dev_attr_touch_thp_ic_cmd_data.attr,
 	&dev_attr_clicktouch_raw.attr,
 	&dev_attr_touch_thp_tx_num.attr,
@@ -3065,6 +3188,7 @@ static struct attribute *touch_attr_group[] = {
 	&dev_attr_touch_irq_no.attr,
 	&dev_attr_touch_finger_status.attr,
 	&dev_attr_resolution_factor.attr,
+	&dev_attr_touch_log_level.attr,
 	&dev_attr_fod_attn_test.attr,
 	&dev_attr_fod_low_attn.attr,
 	&dev_attr_touch_sensor.attr,

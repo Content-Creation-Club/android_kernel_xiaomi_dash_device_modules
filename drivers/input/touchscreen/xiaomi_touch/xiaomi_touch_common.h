@@ -53,8 +53,9 @@
 #define XIAOMI_TOUCH_MMAP_RAW	2
 #define TOUCH_FOD_SUPPORT 1
 #define FOD_TEST_BASE 10
-#define mi_ts_info(fmt, arg...)    pr_info("[MI_TP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
-#define mi_ts_err(fmt, arg...)     pr_err("[MI_TP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg)
+extern int current_log_level;
+#define mi_ts_info(fmt, arg...) do { if (READ_ONCE(current_log_level) > 2) pr_info("[MI_TP-INF][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
+#define mi_ts_err(fmt, arg...) do { if (READ_ONCE(current_log_level) != 0) pr_err("[MI_TP-ERR][%s:%d] "fmt"\n", __func__, __LINE__, ##arg); } while (0)
 #define XIAOMI_TOUCH_UTC_PRINT(tag) \
 	do { \
 		struct timespec64 ts; \
@@ -142,7 +143,7 @@ struct xiaomi_touch_interface {
 	u8 * (*get_touch_ic_buffer)(void);
 	int long_mode_len;
 	int long_mode_value[MAX_BUF_SIZE];
-	bool is_enable_touchraw;
+	int is_enable_touchraw;
 	int palm_sensor_onoff;
 	int thp_downthreshold;
 	int thp_upthreshold;
@@ -160,7 +161,7 @@ struct xiaomi_touch_interface {
 	char tp_hal_version[TP_VERSION_SIZE];
 	bool is_enable_touchdelta;
 	bool active_status;
-	bool finger_status;
+	int finger_status;
 	int irq_no;
 	int touch_sensor_ctrl_value;
 	struct list_head private_data_list;
