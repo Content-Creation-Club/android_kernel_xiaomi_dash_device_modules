@@ -987,13 +987,8 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 		return -ENOMEM;
 	}
 	init_waitqueue_head(&panel->temp_wait);
-	panel->temp_enabled = true;
-	mutex_lock(&touch_callback_lock);
-	mutex_lock(&touch_mode_lock);
-	xiaomi_touch_init_modes(panel, dev->of_node);
-	WRITE_ONCE(panel->registered, true);
-	mutex_unlock(&touch_mode_lock);
-	mutex_unlock(&touch_callback_lock);
+	/* The thread may start immediately; callbacks stay unpublished until ready. */
+	panel->temp_enabled = false;
 	panel->charge_notifier.notifier_call = xiaomi_touch_charge_notifier;
 	ret = power_supply_reg_notifier(&panel->charge_notifier);
 	if (ret) {
@@ -1001,7 +996,6 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 		return ret;
 	}
 	panel->charge_notifier_registered = true;
-	queue_work(panel->pm_wq, &panel->charge_work);
 	if (xiaomi_touch_create_info_proc(panel, touch_id)) {
 		xiaomi_touch_unregister_panel(touch_id);
 		return -ENOMEM;
@@ -1018,6 +1012,16 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 		}
 	}
 
+	/* No fallible preparation remains: a sysfs callback may now enable IRQ. */
+	mutex_lock(&touch_callback_lock);
+	mutex_lock(&touch_mode_lock);
+	xiaomi_touch_init_modes(panel, dev->of_node);
+	WRITE_ONCE(panel->registered, true);
+	mutex_unlock(&touch_mode_lock);
+	WRITE_ONCE(panel->temp_enabled, true);
+	wake_up_interruptible(&panel->temp_wait);
+	queue_work(panel->pm_wq, &panel->charge_work);
+	mutex_unlock(&touch_callback_lock);
 	return 0;
 }
 int register_touch_panel_common(struct device *dev, int touch_id,
@@ -1076,7 +1080,8 @@ static void xiaomi_touch_stop_panel(int touch_id)
 	}
 	xiaomi_touch_unregister_panel_notifier(touch_id);
 	mutex_lock(&touch_callback_lock);
-	if (!panel->registered) {
+	/* Internal rollback also owns fully initialized queues, but was never live. */
+	if (!panel->registered && !panel->pm_wq) {
 		mutex_unlock(&touch_callback_lock);
 		return;
 	}

@@ -4430,6 +4430,7 @@ err_register_qcom_panel_event_failed:
 err_register_mtk_drm_failed:
 #endif
 /*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 end*/
+err_create_nvt_charger_queue_failed:
 err_register_touch_panel_common_failed:
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
 	if (ts->touch_panel_registered)
@@ -4483,16 +4484,9 @@ err_create_nvt_reset_fw_status_wq_failed:
 		destroy_workqueue(ts->event_wq);
 		ts->event_wq = NULL;
 	}
-err_create_nvt_charger_queue_failed:
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 #if IS_ENABLED(CONFIG_MI_DISP_NOTIFIER)
 	xiaomi_unregister_panel_notifier_common(0);
-#endif
-#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-	if (ts->touch_panel_registered) {
-		unregister_touch_panel_common(0);
-		ts->touch_panel_registered = false;
-	}
 #endif
 #if NVT_TOUCH_ESD_PROTECT
 	if (nvt_esd_check_wq) {
@@ -4513,7 +4507,15 @@ err_create_nvt_fwu_wq_failed:
 #if WAKEUP_GESTURE
 	device_init_wakeup(&ts->client->dev, 0);
 #endif
+	/* All callback sources/work are gone, including the NULL event_wq path. */
+	nvt_irq_enable(false);
 	free_irq(client->irq, ts);
+#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
+	if (ts->touch_panel_registered) {
+		unregister_touch_panel_common(0);
+		ts->touch_panel_registered = false;
+	}
+#endif
 err_int_request_failed:
 	if (ts->pen_support) {
 		input_unregister_device(ts->pen_input_dev);
