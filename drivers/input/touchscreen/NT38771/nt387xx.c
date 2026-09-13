@@ -3169,7 +3169,6 @@ static void nvt_ic_switch_mode(void)
 		mutex_unlock(&ts->lock);
 		if (ret < 0)
 			NVT_ERR("set nonui mode failed: %d\n", ret);
-		return;
 	}
 	if (driver_get_touch_mode_common(0, Touch_Doubletap_Mode) > 0)
 		gesture |= GESTURE_DOUBLE_TAP;
@@ -4967,7 +4966,9 @@ static int32_t nvt_ts_suspend(struct device *dev)
 
 	msleep(50);
 	mutex_unlock(&ts->lock);
+#if !IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
 	ts->game_mode = false;
+#endif
 
 /*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 end*/
 
