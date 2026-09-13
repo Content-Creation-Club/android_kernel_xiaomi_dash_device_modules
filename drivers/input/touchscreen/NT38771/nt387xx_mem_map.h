@@ -137,7 +137,7 @@ static const struct nvt_ts_mem_map NT38771_memory_map = {
   /*P16 code for HQFEAT-94200 by xiongdejun at 2025/4/15 start*/
 	.TX_SELF_DIFF_ADDR            = 0x31380,
 	.RX_SELF_DIFF_ADDR            = 0x31268,
-	.RAWDATA_FLATNESS_INFO_ADDR   = 0x2B4B0,
+	.RAWDATA_FLATNESS_INFO_ADDR   = 0x314B0,
   /*P16 code for HQFEAT-94200 by xiongdejun at 2025/4/15 end*/
 	.ENB_CASC_REG                 = {.addr = 0, .mask = 0},
 	/* FW History */

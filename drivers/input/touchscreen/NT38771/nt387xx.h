@@ -421,7 +421,7 @@ typedef enum {
 
 #define DUMMY_BYTES (1)
 #define NVT_TRANSFER_LEN	(15*1024)
-#define NVT_READ_LEN		(4*1024)
+#define NVT_READ_LEN		(8*1024)
 #define NVT_XBUF_LEN		(NVT_TRANSFER_LEN+1+DUMMY_BYTES)
 
 typedef enum {

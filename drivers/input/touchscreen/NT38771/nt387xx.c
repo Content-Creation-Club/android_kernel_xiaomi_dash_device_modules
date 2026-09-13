@@ -3723,7 +3723,7 @@ static void nvt_xiaomi_touch_fod_attn_test(int value)
 	uint16_t status = 0;
 
 	if (!ts || ts->nvt_tool_in_use ||
-	    READ_ONCE(ts->display_suspend_ready))
+	    READ_ONCE(ts->firmware_loading))
 		return;
 
 	mutex_lock(&ts->lock);
@@ -3741,7 +3741,7 @@ static void nvt_xiaomi_touch_fod_attn_test(int value)
 static void nvt_xiaomi_touch_fod_low_attn(int value)
 {
 	if (!ts || ts->nvt_tool_in_use ||
-	    READ_ONCE(ts->display_suspend_ready))
+	    READ_ONCE(ts->firmware_loading))
 		return;
 
 	mutex_lock(&ts->lock);
@@ -3790,8 +3790,9 @@ static int nvt_set_thp_cur_value(int mode, int *values)
 		return 0;
 	}
 	if (mode == THP_IDLE_BASALINE_UPDATE) {
-		if (values[0] < 0 || !bTouchIsAwake ||
-		    ts->ic_state < NVT_STATE_RESUME_OUT)
+		if (values[0] < 0 || !ts->touch_raw_enabled ||
+		    (ts->ic_state != NVT_STATE_INIT &&
+		     ts->ic_state != NVT_STATE_RESUME_OUT))
 			return 0;
 		mutex_lock(&ts->lock);
 		ret = nvt_set_extend_custom_cmd(0x19, 1);
@@ -3829,10 +3830,9 @@ static int nvt_set_thp_cur_value(int mode, int *values)
 		return -EINVAL;
 	}
 
-	/* Stock only accepts the idle-scan command while the IC is fully awake. */
-	if (!bTouchIsAwake ||
+	/* Stock requires raw mode and an initialized or fully resumed IC. */
+	if (!ts->touch_raw_enabled ||
 	    (ts->ic_state != NVT_STATE_INIT &&
-	     ts->ic_state != NVT_STATE_RESUME_IN &&
 	     ts->ic_state != NVT_STATE_RESUME_OUT)) {
 		NVT_LOG("ignore THP_LOCK_SCAN_MODE=%d while ic_state=%d awake=%d\n",
 			value, ts->ic_state, bTouchIsAwake);
@@ -5244,6 +5244,18 @@ static int32_t nvt_ts_suspend(struct device *dev)
 	ts->fod_rpt_slot_9 = false;
 	ts->fod_input_id = 0;
 /*P16 code for BUGP16-7431 by liuyupei at 2025/7/8 end*/
+	/* The awake mode setter already owns the nonui cache. */
+	if (ts->gesture_command && ts->nonui_status) {
+		int ret;
+
+		mutex_lock(&ts->lock);
+		pm_stay_awake(&ts->client->dev);
+		ret = nvt_set_extend_custom_cmd(0x25, ts->nonui_status);
+		pm_relax(&ts->client->dev);
+		mutex_unlock(&ts->lock);
+		if (ret < 0)
+			NVT_ERR("replay nonui mode failed: %d\n", ret);
+	}
 	ts->ic_state = NVT_STATE_SUSPEND_IN;
 /*P16 code for BUGP16-5788 by xiongdejun at 2025/6/18 start*/
 	if ((ts->gesture_command & GESTURE_FOD_PRESS) == 0 && ts->fod_setting == 5) {
