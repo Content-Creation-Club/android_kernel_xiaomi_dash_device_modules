@@ -246,6 +246,7 @@ struct xiaomi_touch_pdata {
 	atomic_t common_data_index;
 };
 struct xiaomi_touch_client {
+	u64 generation;
 	struct list_head node;
 	u8 mmap_area;
 	s8 touch_id;
@@ -277,10 +278,7 @@ struct xiaomi_touch_panel_data {
 	int grid_value[CMD_DATA_BUF_SIZE];
 	int grid_length;
 	struct mutex pm_lock;
-	struct mutex proc_lock;
 	struct proc_dir_entry *info_proc[3];
-	char info_result[320];
-	size_t info_result_len;
 	char hal_version[128];
 	char limit_version[30];
 	int self_test_result;
@@ -345,6 +343,7 @@ extern void update_active_status(bool status);
 extern void update_touch_irq_no(int irq_no);
 extern int knock_node_init(void);
 extern void knock_node_release(void);
+extern void knock_node_publish(void);
 extern void register_frame_count_change_listener(void *listener);
 extern void update_knock_data(u8 *buf, int size, int frame_id);
 extern void knock_data_notify(void);

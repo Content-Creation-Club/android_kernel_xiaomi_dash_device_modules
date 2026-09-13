@@ -684,11 +684,13 @@ static int32_t tp_data_dump_open(struct inode *inode, struct file *file)
 static const struct proc_ops tp_data_dump_fops = {
 	.proc_open  = tp_data_dump_open,
 	.proc_read  = seq_read,
+	.proc_release = single_release,
 };
 #else
 static const struct file_operations tp_data_dump_fops = {
 	.open 	 = tp_data_dump_open,
 	.read 	 = seq_read,
+	.release = single_release,
 };
 #endif
 /* P16 code for HQFEAT-89782 by p-zhangyundan at 2025/4/30 end */
