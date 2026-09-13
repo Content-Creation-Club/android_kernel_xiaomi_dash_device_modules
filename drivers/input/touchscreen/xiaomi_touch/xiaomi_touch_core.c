@@ -38,7 +38,6 @@ static DEFINE_MUTEX(thp_ic_write_data_mutex);
 static bool xiaomi_touch_probe_finished = false;
 #define RAW_SIZE (PAGE_SIZE * 12)
 
-static int temperature_charge_state = -1;
 static int temperature_last = 1000;
 
 int get_bms_temp_common(void)
@@ -47,17 +46,83 @@ int get_bms_temp_common(void)
 	union power_supply_propval value = { 0 };
 
 	bms = power_supply_get_by_name("bms");
-	if (!bms || power_supply_get_property(bms, POWER_SUPPLY_PROP_TEMP, &value))
+	if (!bms)
 		return -1000;
+	if (power_supply_get_property(bms, POWER_SUPPLY_PROP_TEMP, &value))
+		value.intval = -1000;
+	power_supply_put(bms);
 	return value.intval;
 }
 EXPORT_SYMBOL_GPL(get_bms_temp_common);
 
-void xiaomi_touch_set_temperature_charge_state(int charging)
+/* Lockless: raw-enable and recovery can call this while holding NVT's lock. */
+int xiaomi_touch_get_charge_state(int touch_id)
 {
-	WRITE_ONCE(temperature_charge_state, charging);
+	if (touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL)
+		return 0;
+	return READ_ONCE(touch_panel_data[touch_id].charge_state);
 }
-EXPORT_SYMBOL_GPL(xiaomi_touch_set_temperature_charge_state);
+EXPORT_SYMBOL_GPL(xiaomi_touch_get_charge_state);
+
+static int xiaomi_touch_get_charging_status(void)
+{
+	const char * const names[] = { "wireless", "usb" };
+	union power_supply_propval value;
+	struct power_supply *psy;
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(names); i++) {
+		psy = power_supply_get_by_name(names[i]);
+		if (!psy)
+			continue;
+		ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_ONLINE, &value);
+		power_supply_put(psy);
+		if (!ret && value.intval == 1)
+			return 1;
+	}
+	return 0;
+}
+
+/* Caller holds touch_callback_lock; cache/notification also advance asleep. */
+static void xiaomi_touch_charge_notify(struct xiaomi_touch_panel_data *panel,
+		int charging)
+{
+	int touch_id = panel - touch_panel_data;
+
+	WRITE_ONCE(panel->charge_state, charging);
+	panel->charge_initialized = true;
+	add_common_data_to_buf(touch_id, SET_CUR_VALUE, THP_HAL_CHARGING_STATUS,
+			      1, &charging);
+	if (panel->hardware_operation.set_charge_state)
+		panel->hardware_operation.set_charge_state(charging);
+}
+
+static void xiaomi_touch_charge_work(struct work_struct *work)
+{
+	struct xiaomi_touch_panel_data *panel = container_of(work,
+			struct xiaomi_touch_panel_data, charge_work);
+	int charging;
+
+	mutex_lock(&touch_callback_lock);
+	if (panel->registered) {
+		charging = xiaomi_touch_get_charging_status();
+		if (!panel->charge_initialized || charging != panel->charge_state)
+			xiaomi_touch_charge_notify(panel, charging);
+	}
+	mutex_unlock(&touch_callback_lock);
+}
+
+static int xiaomi_touch_charge_notifier(struct notifier_block *nb,
+		unsigned long event, void *data)
+{
+	struct xiaomi_touch_panel_data *panel = container_of(nb,
+			struct xiaomi_touch_panel_data, charge_notifier);
+
+	/* Unregister synchronizes this notifier before the queue is drained. */
+	if (READ_ONCE(panel->registered))
+		queue_work(panel->pm_wq, &panel->charge_work);
+	return NOTIFY_OK;
+}
 
 void enable_temperature_detection_func(bool enable)
 {
@@ -105,7 +170,7 @@ static int xiaomi_touch_temp_thread_func(void *data)
 			add_common_data_to_buf(0, SET_CUR_VALUE, 0x446, 1, &temperature);
 			temperature_last = temperature;
 		}
-		interval = READ_ONCE(temperature_charge_state) ? 5000 : 10000;
+		interval = xiaomi_touch_get_charge_state(0) ? 5000 : 10000;
 		wait_event_interruptible_timeout(panel->temp_wait,
 			kthread_should_stop(), msecs_to_jiffies(interval));
 	}
@@ -125,31 +190,66 @@ static_assert(offsetof(hardware_operation_t, display_suspend_ready) ==
 static_assert(offsetof(hardware_operation_t, resume_suspend) ==
 		23 * sizeof(void *));
 
+static_assert(offsetof(hardware_operation_t, set_charge_state) ==
+		24 * sizeof(void *));
+
+/* Lock order: callback -> pm -> NVT lock -> mode (getter). No queue flush
+ * under these locks. Mode 19 getters report the request, not a hardware ACK.
+ */
+static void xiaomi_touch_apply_pm(struct xiaomi_touch_panel_data *panel)
+{
+	int ret;
+
+	if (!panel->registered || panel->suspended == !panel->pm_resume ||
+	    !panel->hardware_operation.resume_suspend)
+		return;
+	/* NVT ignores the public gesture argument; its bit encoding differs. */
+	ret = panel->hardware_operation.resume_suspend(panel->pm_resume, 0);
+	if (ret) {
+		dev_err(panel->dev, "touch PM failed: %d\n", ret);
+		return;
+	}
+	if (panel->pm_resume) {
+		xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_RESUME);
+		/* Query here too: a supply event may still be queued behind resume. */
+		xiaomi_touch_charge_notify(panel, xiaomi_touch_get_charging_status());
+	} else {
+		if (panel->pm_async_suspend &&
+		    panel->hardware_operation.display_suspend_ready)
+			panel->hardware_operation.display_suspend_ready();
+		xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_SUSPEND);
+	}
+	panel->suspended = !panel->pm_resume;
+}
+
 static void xiaomi_touch_resume_work(struct work_struct *work)
 {
 	struct xiaomi_touch_panel_data *panel = container_of(work,
 			struct xiaomi_touch_panel_data, resume_work);
-	int ret;
 
+	mutex_lock(&touch_callback_lock);
 	mutex_lock(&panel->pm_lock);
-	if (!panel->registered || !panel->panel_notifier_registered ||
-	    !panel->suspended) {
-		mutex_unlock(&panel->pm_lock);
-		return;
-	}
+	xiaomi_touch_apply_pm(panel);
+	mutex_unlock(&panel->pm_lock);
+	mutex_unlock(&touch_callback_lock);
+}
 
-	if (!panel->hardware_operation.resume_suspend) {
-		mutex_unlock(&panel->pm_lock);
+/* Caller holds callback_lock. A pending worker always consumes the latest
+ * target; a request after a running worker queues another pass. DRM low-power
+ * transitions execute synchronously, without the mode19 display-ready call.
+ */
+static void xiaomi_touch_request_pm(struct xiaomi_touch_panel_data *panel,
+		bool resume, bool asynchronous)
+{
+	if (!panel->registered)
 		return;
-	}
-
-	ret = panel->hardware_operation.resume_suspend(1, 0);
-	if (!ret) {
-		panel->suspended = false;
-		xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_RESUME);
-	} else {
-		dev_err(panel->dev, "touch resume failed: %d\n", ret);
-	}
+	mutex_lock(&panel->pm_lock);
+	panel->pm_resume = resume;
+	panel->pm_async_suspend = asynchronous;
+	if (asynchronous || resume)
+		queue_work(panel->pm_wq, &panel->resume_work);
+	else
+		xiaomi_touch_apply_pm(panel);
 	mutex_unlock(&panel->pm_lock);
 }
 
@@ -161,7 +261,6 @@ static int xiaomi_drm_panel_notifier_callback(struct notifier_block *nb,
 			struct xiaomi_touch_panel_data, panel_notifier);
 	struct mi_disp_notifier *evdata = data;
 	int blank;
-	int ret;
 
 	if (event != MI_DISP_DPMS_EVENT && event != MI_DISP_DPMS_EARLY_EVENT)
 		return NOTIFY_DONE;
@@ -169,56 +268,29 @@ static int xiaomi_drm_panel_notifier_callback(struct notifier_block *nb,
 		return NOTIFY_DONE;
 
 	blank = *(int *)evdata->data;
+	mutex_lock(&touch_callback_lock);
+	if (!panel->registered || !panel->panel_notifier_registered)
+		goto out;
 	if (blank == MI_DISP_DPMS_LP1 || blank == MI_DISP_DPMS_LP2 ||
-	    blank == MI_DISP_DPMS_POWERDOWN) {
-		/* Finish an older resume before entering the low-power state. */
-		flush_workqueue(panel->pm_wq);
-
-		mutex_lock(&panel->pm_lock);
-		if (!panel->registered || !panel->panel_notifier_registered ||
-		    panel->suspended) {
-			mutex_unlock(&panel->pm_lock);
-			return NOTIFY_OK;
-		}
-		if (!panel->hardware_operation.resume_suspend) {
-			mutex_unlock(&panel->pm_lock);
-			return NOTIFY_DONE;
-		}
-
-		ret = panel->hardware_operation.resume_suspend(0, 0);
-		if (!ret) {
-			panel->suspended = true;
-			xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_SUSPEND);
-		} else {
-			dev_err(panel->dev, "touch suspend failed: %d\n", ret);
-		}
-		mutex_unlock(&panel->pm_lock);
-		return NOTIFY_OK;
-	}
-
-	if (event == MI_DISP_DPMS_EVENT && blank == MI_DISP_DPMS_ON) {
-		queue_work(panel->pm_wq, &panel->resume_work);
-		return NOTIFY_OK;
-	}
-
-	if (event == MI_DISP_DPMS_EARLY_EVENT &&
-	    blank == MI_DISP_DPMS_OFF) {
-		mutex_lock(&panel->pm_lock);
-		if (panel->registered && panel->panel_notifier_registered &&
-		    panel->hardware_operation.display_suspend_ready)
-			panel->hardware_operation.display_suspend_ready();
-		mutex_unlock(&panel->pm_lock);
-		return NOTIFY_OK;
-	}
-
-	return NOTIFY_DONE;
+	    blank == MI_DISP_DPMS_POWERDOWN)
+		xiaomi_touch_request_pm(panel, false, false);
+	else if (event == MI_DISP_DPMS_EVENT && blank == MI_DISP_DPMS_ON)
+		xiaomi_touch_request_pm(panel, true, false);
+	else if (event == MI_DISP_DPMS_EARLY_EVENT && blank == MI_DISP_DPMS_OFF &&
+		 panel->hardware_operation.display_suspend_ready)
+		panel->hardware_operation.display_suspend_ready();
+out:
+	mutex_unlock(&touch_callback_lock);
+	return NOTIFY_OK;
 }
 #endif
 
 int xiaomi_register_panel_notifier_common(struct device *dev, int touch_id)
 {
 	struct xiaomi_touch_panel_data *panel;
+#if IS_ENABLED(CONFIG_MI_DISP_NOTIFIER)
 	int ret;
+#endif
 
 	if (!dev || touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL)
 		return -EINVAL;
@@ -230,23 +302,11 @@ int xiaomi_register_panel_notifier_common(struct device *dev, int touch_id)
 		return -EBUSY;
 
 #if IS_ENABLED(CONFIG_MI_DISP_NOTIFIER)
-	panel->pm_wq = alloc_ordered_workqueue("xiaomi_touch_pm_%d",
-			WQ_MEM_RECLAIM, touch_id);
-	if (!panel->pm_wq)
-		return -ENOMEM;
-
-	panel->dev = dev;
-	panel->suspended = false;
-	INIT_WORK(&panel->resume_work, xiaomi_touch_resume_work);
 	panel->panel_notifier.notifier_call =
 		xiaomi_drm_panel_notifier_callback;
 	ret = mi_disp_register_client(&panel->panel_notifier);
-	if (ret) {
-		destroy_workqueue(panel->pm_wq);
-		panel->pm_wq = NULL;
-		panel->dev = NULL;
+	if (ret)
 		return ret;
-	}
 	panel->panel_notifier_registered = true;
 	return 0;
 #else
@@ -270,15 +330,9 @@ void xiaomi_unregister_panel_notifier_common(int touch_id)
 	if (mi_disp_unregister_client(&panel->panel_notifier))
 		dev_err(panel->dev, "failed to unregister display notifier\n");
 #endif
-	cancel_work_sync(&panel->resume_work);
-	destroy_workqueue(panel->pm_wq);
-	panel->pm_wq = NULL;
-
-	mutex_lock(&panel->pm_lock);
+	mutex_lock(&touch_callback_lock);
 	panel->panel_notifier_registered = false;
-	panel->suspended = false;
-	panel->dev = NULL;
-	mutex_unlock(&panel->pm_lock);
+	mutex_unlock(&touch_callback_lock);
 }
 EXPORT_SYMBOL_GPL(xiaomi_unregister_panel_notifier_common);
 
@@ -647,12 +701,11 @@ static void xiaomi_touch_set_mode(struct xiaomi_touch_panel_data *panel,
 		add_common_data_to_buf(touch_id, SET_CUR_VALUE, Touch_Suspend,
 				       1, &notification);
 		break;
-	case Touch_Debug_Level:
 	case Touch_Power_Status:
-		/* Follow-up batches own log gating and the common PM scheduler.
-		 * These are cached requests, not hardware acknowledgements.
-		 */
-		mi_ts_err("mode %d cached; common log/PM action not implemented", mode);
+		xiaomi_touch_request_pm(panel, values[0] & 1, true);
+		break;
+	case Touch_Debug_Level:
+		mi_ts_err("mode %d cached; common log action not implemented", mode);
 		break;
 	default:
 		/* Stock retains requested; a later cmd work may commit it. */
@@ -705,6 +758,7 @@ int register_touch_panel_common(struct device *dev, int touch_id,
 	struct xiaomi_touch_panel_data *panel;
 	size_t frame_total;
 	size_t raw_total;
+	int ret;
 
 	if (!dev || !dev->of_node ||
 	    touch_id < 0 || touch_id >= XIAOMI_TOUCH_MAX_PANEL || !hardware_param)
@@ -774,6 +828,27 @@ int register_touch_panel_common(struct device *dev, int touch_id,
 		memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
 		return -ENOMEM;
 	}
+	panel->dev = dev;
+	panel->suspended = false;
+	panel->pm_resume = true;
+	panel->pm_async_suspend = false;
+	panel->charge_notifier_registered = false;
+	panel->charge_initialized = false;
+	panel->charge_state = xiaomi_touch_get_charging_status();
+	INIT_WORK(&panel->resume_work, xiaomi_touch_resume_work);
+	INIT_WORK(&panel->charge_work, xiaomi_touch_charge_work);
+	panel->pm_wq = alloc_ordered_workqueue("xiaomi_touch_pm_%d",
+			WQ_MEM_RECLAIM, touch_id);
+	if (!panel->pm_wq) {
+		destroy_workqueue(panel->mode_wq);
+		panel->mode_wq = NULL;
+		kfree(panel->raw_data);
+		kfree(panel->frame_data);
+		panel->raw_data = NULL;
+		panel->frame_data = NULL;
+		memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
+		return -ENOMEM;
+	}
 	init_waitqueue_head(&panel->temp_wait);
 	panel->temp_enabled = true;
 	mutex_lock(&touch_callback_lock);
@@ -782,6 +857,14 @@ int register_touch_panel_common(struct device *dev, int touch_id,
 	WRITE_ONCE(panel->registered, true);
 	mutex_unlock(&touch_mode_lock);
 	mutex_unlock(&touch_callback_lock);
+	panel->charge_notifier.notifier_call = xiaomi_touch_charge_notifier;
+	ret = power_supply_reg_notifier(&panel->charge_notifier);
+	if (ret) {
+		unregister_touch_panel_common(touch_id);
+		return ret;
+	}
+	panel->charge_notifier_registered = true;
+	queue_work(panel->pm_wq, &panel->charge_work);
 	if (xiaomi_touch_create_info_proc(panel, touch_id)) {
 		unregister_touch_panel_common(touch_id);
 		return -ENOMEM;
@@ -828,6 +911,12 @@ static void xiaomi_touch_stop_panel(int touch_id)
 		return;
 
 	panel = &touch_panel_data[touch_id];
+	/* Withdraw external producers before draining callbacks and work. */
+	if (panel->charge_notifier_registered) {
+		power_supply_unreg_notifier(&panel->charge_notifier);
+		panel->charge_notifier_registered = false;
+	}
+	xiaomi_unregister_panel_notifier_common(touch_id);
 	mutex_lock(&touch_callback_lock);
 	if (!panel->registered) {
 		mutex_unlock(&touch_callback_lock);
@@ -853,13 +942,16 @@ static void xiaomi_touch_stop_panel(int touch_id)
 #endif
 	}
 	mutex_unlock(&touch_callback_lock);
+	cancel_work_sync(&panel->resume_work);
+	cancel_work_sync(&panel->charge_work);
+	destroy_workqueue(panel->pm_wq);
+	panel->pm_wq = NULL;
 	cancel_work_sync(&panel->cmd_work);
 	cancel_work_sync(&panel->switch_work);
 	cancel_work_sync(&panel->grid_work);
 	destroy_workqueue(panel->mode_wq);
 	panel->mode_wq = NULL;
 	xiaomi_touch_remove_info_proc_common(touch_id);
-	xiaomi_unregister_panel_notifier_common(touch_id);
 	if (touch_id == 0)
 		stop_temperature_detection_func();
 	spin_lock_irqsave(&panel->client_lock, flags);

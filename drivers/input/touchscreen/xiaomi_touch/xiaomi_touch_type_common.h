@@ -253,7 +253,7 @@ typedef struct hardware_operation {
 	int (*htc_ic_set_mode_value)(common_data_t *data);
 	int (*htc_ic_get_mode_value)(common_data_t *data);
 	int (*resume_suspend)(int resume, int gesture_type);
-	void (*set_charge_state)(void);
+	void (*set_charge_state)(int charging);
 	int (*limit_version_read)(char *version);
 	void (*reserved_d0)(void);
 	void (*fod_test)(int value);

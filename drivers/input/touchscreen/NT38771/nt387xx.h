@@ -264,11 +264,9 @@ struct nvt_ts_data {
 	bool touch_panel_registered;
 	bool irq_enabled;
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-	struct work_struct power_supply_work;
+	struct work_struct charge_restore_work;
 	struct workqueue_struct *event_wq;
-	struct notifier_block charger_notifier;
-	struct work_struct charger_work;
-	int charger_status;
+	bool charge_restore_pending;
 	s16 report_rate;
 	bool selftest_active;
 	bool selftest_scan_pending;
@@ -284,9 +282,6 @@ struct nvt_ts_data {
 	uint8_t fod_input_id;
 /*P16 code for BUGP16-7431 by liuyupei at 2025/7/8 end*/
 /*P16 code for BUGP16-6740 by liuyupei at 2025/7/1 end*/
-/*P16 code for BUGP16-3227 by p-liaoxianguo at 2025/6/4 start*/
-	int charger_status_store;
-/*P16 code for BUGP16-3227 by p-liaoxianguo at 2025/6/4 end*/
 /*P16 code for BUGP16-7026 by liuyupei at 2025/7/1 start*/
 	int nonui_status;
 /*P16 code for BUGP16-7026 by liuyupei at 2025/7/1 end*/

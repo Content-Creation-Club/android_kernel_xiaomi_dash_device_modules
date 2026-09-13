@@ -31,7 +31,6 @@
 #include <uapi/linux/sched/types.h>
 /*P16 code for HQFEAT-89815 by liaoxianguo at 2025/4/1 end*/
 #include "nt387xx.h"
-#include <linux/power_supply.h>
 
 /* P16 code for HQFEAT-94432 by p-liaoxianguo at 2025/3/27 start */
 #if IS_ENABLED(CONFIG_MI_DISP_NOTIFIER)
@@ -97,9 +96,6 @@ extern void nvt_extra_proc_deinit(void);
 extern int32_t nvt_mp_proc_init(void);
 extern void nvt_mp_proc_deinit(void);
 #endif
-/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-static int nvt_get_charging_status(void);
-/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 /*P16 code for HQFEAT-89614 by liaoxianguo at 2025/4/3 start*/
 extern void mi_display_gesture_callback_register(void (*cb)(void));
 /*P16 code for HQFEAT-89614 by liaoxianguo at 2025/4/3 end*/
@@ -2186,9 +2182,9 @@ static void nvt_fw_reload_recovery(void)
 	}
 	if (ts->pen_support)
 		nvt_restore_pen_state();
-	ts->charger_status = -1;
+	ts->charge_restore_pending = true;
 	if (ts->event_wq)
-		queue_work(ts->event_wq, &ts->power_supply_work);
+		queue_work(ts->event_wq, &ts->charge_restore_work);
 
 	/* reload gesture cmd when open gesture */
 	if (!(!ts) && (!bTouchIsAwake) && (ts->gesture_command)) {
@@ -3537,9 +3533,11 @@ static int nvt_set_thermal_temp(int temperature, bool read_bms)
 
 static int nvt_enable_touch_raw(int value)
 {
+	int charging = xiaomi_touch_get_charge_state(0);
+
 	ts->touch_raw_enabled = true;
 	add_common_data_to_buf(0, SET_CUR_VALUE, THP_HAL_CHARGING_STATUS,
-				      1, &ts->charger_status);
+				      1, &charging);
 	mutex_lock(&ts->lock);
 	nvt_update_firmware(BOOT_UPDATE_FIRMWARE_NAME, false);
 	mutex_unlock(&ts->lock);
@@ -3658,6 +3656,28 @@ static int nvt_ic_get_fw_version(char *version)
 	return 0;
 }
 
+/* Caller holds ts->lock. Recovery is a request, never a second supply cache. */
+static void nvt_restore_charge_state(int charging)
+{
+	u8 command[3] = { EVENT_MAP_HOST_CMD, charging ? 0x53 : 0x51, 0 };
+
+	if (!bTouchIsAwake || READ_ONCE(ts->firmware_loading) || ts->nvt_tool_in_use)
+		return;
+	/* Match stock: a failed write is logged, not automatically retried. */
+	ts->charge_restore_pending = false;
+	if (CTP_SPI_WRITE(ts->client, command, sizeof(command)))
+		NVT_ERR("charger state write failed\n");
+}
+
+static void nvt_set_charge_state(int charging)
+{
+	if (!ts)
+		return;
+	mutex_lock(&ts->lock);
+	nvt_restore_charge_state(charging);
+	mutex_unlock(&ts->lock);
+}
+
 static const hardware_operation_t nvt_hardware_operation = {
 	.self_test = nvt_ic_self_test,
 	.lockdown_info_read = nvt_ic_lockdown_info_read,
@@ -3672,6 +3692,7 @@ static const hardware_operation_t nvt_hardware_operation = {
 	.htc_ic_set_mode_value = nvt_thp_ic_set_mode,
 	.htc_ic_get_mode_value = nvt_thp_ic_get_mode,
 	.resume_suspend = nvt_ts_resume_suspend,
+	.set_charge_state = nvt_set_charge_state,
 	.fod_attn_test = nvt_xiaomi_touch_fod_attn_test,
 	.fod_low_attn = nvt_xiaomi_touch_fod_low_attn,
 	.set_thermal_temp = nvt_set_thermal_temp,
@@ -3744,91 +3765,17 @@ static int nvt_xiaomi_touch_fod_test(int value)
 }
 /*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 end*/
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-static int nvt_get_charging_status(void)
+static void nvt_charge_restore_work(struct work_struct *work)
 {
-	struct power_supply *usb_psy = NULL;
-	struct power_supply *dc_psy = NULL;
-	union power_supply_propval val = {0};
-	int rc = 0;
-	int is_charging = 0;
-	is_charging = !!power_supply_is_system_supplied();
-	if (!is_charging)
-		return 0;
-	dc_psy = power_supply_get_by_name("wireless");
-	if (dc_psy) {
-		rc = power_supply_get_property(dc_psy, POWER_SUPPLY_PROP_ONLINE, &val);
-		if (rc < 0)
-			NVT_ERR("Couldn't get DC online status, rc=%d\n", rc);
-		else if (val.intval == 1)
-			return 1;
-	}
-	usb_psy = power_supply_get_by_name("usb");
-	if (usb_psy) {
-		rc = power_supply_get_property(usb_psy, POWER_SUPPLY_PROP_ONLINE, &val);
-		if (rc < 0)
-			NVT_ERR("Couldn't get usb online status, rc=%d\n", rc);
-		else if (val.intval == 1)
-			return 1;
-	}
-	return 0;
-}
-static void charger_power_supply_work(struct work_struct *work)
-{
-	struct nvt_ts_data *ts_data = NULL;
-	int charge_status = -1;
-	bool recovery;
-	u8 command[3] = { EVENT_MAP_HOST_CMD, 0, 0 };
-	if (!work) {
-		NVT_ERR("work is null");
-	}
-	ts_data = container_of(work, struct nvt_ts_data, power_supply_work);
-	recovery = ts_data->charger_status < 0;
-	charge_status = recovery ? !!power_supply_is_system_supplied() :
-				   !!nvt_get_charging_status();
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-	xiaomi_touch_set_temperature_charge_state(charge_status);
+	struct nvt_ts_data *data = container_of(work,
+			struct nvt_ts_data, charge_restore_work);
+
+	mutex_lock(&data->lock);
+	if (data->charge_restore_pending)
+		nvt_restore_charge_state(xiaomi_touch_get_charge_state(0));
+	mutex_unlock(&data->lock);
 #endif
-	if (recovery) {
-		if (READ_ONCE(ts_data->firmware_loading) || ts_data->nvt_tool_in_use)
-			return;
-		mutex_lock(&ts_data->lock);
-		if (bTouchIsAwake == 1) {
-			ts_data->charger_status = charge_status;
-			ts_data->charger_status_store = charge_status;
-			command[1] = charge_status ? 0x53 : 0x51;
-			if (CTP_SPI_WRITE(ts_data->client, command, sizeof(command)))
-				NVT_ERR("WDT charger restore failed\n");
-		}
-		mutex_unlock(&ts_data->lock);
-		return;
-	}
-/*P16 code for BUGP16-3227 by p-liaoxianguo at 2025/6/4 start*/
-	if (charge_status != ts_data->charger_status || ts_data->charger_status <0) {
-		ts_data->charger_status = charge_status;
-#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-		add_common_data_to_buf(0, SET_CUR_VALUE, THP_HAL_CHARGING_STATUS,
-				      1, &charge_status);
-#endif
-		mutex_lock(&ts->lock);
-		ts->charger_status_store = ts_data->charger_status;
-		if (bTouchIsAwake == 1 && !READ_ONCE(ts_data->firmware_loading) &&
-		    !ts_data->nvt_tool_in_use) {
-			command[1] = charge_status ? 0x53 : 0x51;
-			if (CTP_SPI_WRITE(ts_data->client, command, sizeof(command)))
-				NVT_ERR("charger state write failed\n");
-		}
-		NVT_LOG("nvt charger mode is %d\n",ts_data->charger_status);
-		mutex_unlock(&ts->lock);
-	}
-/*P16 code for BUGP16-3227 by p-liaoxianguo at 2025/6/4 end*/
-}
-static int charger_status_event_callback(struct notifier_block *nb, unsigned long event, void *ptr)
-{
-	struct nvt_ts_data *ts_data = container_of(nb, struct nvt_ts_data, charger_notifier);
-	if (!ts_data)
-		return 0;
-	queue_work(ts_data->event_wq, &ts_data->power_supply_work);
-	return 0;
 }
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 /*P16 code for HQFEAT-89614 by liaoxianguo at 2025/4/3 start*/
@@ -4416,6 +4363,10 @@ static int32_t nvt_ts_probe(struct spi_device *client)
     }
 #endif
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
+	INIT_WORK(&ts->charge_restore_work, nvt_charge_restore_work);
+#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
+	INIT_WORK(&ts->resume_work, nvt_resume_work);
+#endif
 	ts->event_wq = alloc_workqueue("nvt_charger_queue",
 					WQ_UNBOUND | WQ_HIGHPRI | WQ_CPU_INTENSIVE, 1);
 	if (!ts->event_wq) {
@@ -4423,13 +4374,6 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		ret = -ENOMEM;
 		goto err_create_nvt_charger_queue_failed;
 	}
-	INIT_WORK(&ts->power_supply_work, charger_power_supply_work);
-#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-	INIT_WORK(&ts->resume_work, nvt_resume_work);
-#endif
-	ts->charger_notifier.notifier_call = charger_status_event_callback;
-	if (power_supply_reg_notifier(&ts->charger_notifier))
-	NVT_ERR("failed to register charger notifier client");
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
 	memset(&xiaomi_touch_interfaces, 0x00, sizeof(struct xiaomi_touch_interface));
@@ -4522,12 +4466,20 @@ err_create_nvt_reset_fw_status_wq_failed:
 #endif
 /*P16 code for HQFEAT-89614 by liaoxianguo at 2025/4/3 end*/
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-	if (ts->event_wq) {
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
+	if (ts->event_wq)
 		cancel_work_sync(&ts->resume_work);
 #endif
+#if NVT_TOUCH_ESD_PROTECT
+	if (nvt_esd_check_wq) {
+		cancel_delayed_work_sync(&nvt_esd_check_work);
+		destroy_workqueue(nvt_esd_check_wq);
+		nvt_esd_check_wq = NULL;
+	}
+#endif
+	if (ts->event_wq) {
 		nvt_irq_enable(false);
-		cancel_work_sync(&ts->power_supply_work);
+		cancel_work_sync(&ts->charge_restore_work);
 		destroy_workqueue(ts->event_wq);
 		ts->event_wq = NULL;
 	}
@@ -4643,9 +4595,6 @@ static int32_t nvt_ts_remove(struct spi_device *client)
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
 	xiaomi_touch_stop_panel_common(0);
 #endif
-/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-	power_supply_unreg_notifier(&ts->charger_notifier);
-/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 /*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 start*/
 #if IS_ENABLED(CONFIG_MI_DISP_NOTIFIER)
 	xiaomi_unregister_panel_notifier_common(0);
@@ -4675,22 +4624,15 @@ static int32_t nvt_ts_remove(struct spi_device *client)
 	nvt_flash_proc_deinit();
 #endif
 	nvt_touch_sysfs_deinit();
-	/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-	if (ts->event_wq) {
-#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-		cancel_work_sync(&ts->resume_work);
-#endif
-		nvt_irq_enable(false);
-		cancel_work_sync(&ts->power_supply_work);
-		destroy_workqueue(ts->event_wq);
-		ts->event_wq = NULL;
-	}
-	/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 
 #if NVT_DRIVER_INSERT_FRAME
 	hrtimer_cancel(&ts->nvt_hrtimer);
 #endif
 
+#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
+	if (ts->event_wq)
+		cancel_work_sync(&ts->resume_work);
+#endif
 #if NVT_TOUCH_ESD_PROTECT
 	if (nvt_esd_check_wq) {
 		cancel_delayed_work_sync(&nvt_esd_check_work);
@@ -4699,6 +4641,13 @@ static int32_t nvt_ts_remove(struct spi_device *client)
 		nvt_esd_check_wq = NULL;
 	}
 #endif
+
+	if (ts->event_wq) {
+		nvt_irq_enable(false);
+		cancel_work_sync(&ts->charge_restore_work);
+		destroy_workqueue(ts->event_wq);
+		ts->event_wq = NULL;
+	}
 
 #if BOOT_UPDATE_FIRMWARE
 	if (nvt_fwu_wq) {
@@ -4771,9 +4720,6 @@ static void nvt_ts_shutdown(struct spi_device *client)
 #endif
 
 	nvt_irq_enable(false);
-/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-	power_supply_unreg_notifier(&ts->charger_notifier);
-/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 /*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 start*/
 #if IS_ENABLED(CONFIG_MI_DISP_NOTIFIER)
 	xiaomi_unregister_panel_notifier_common(0);
@@ -4818,22 +4764,15 @@ static void nvt_ts_shutdown(struct spi_device *client)
 	}
 #endif
 /*P16 code for HQFEAT-89614 by liaoxianguo at 2025/4/3 end*/
-	/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 start */
-	if (ts->event_wq) {
-#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-		cancel_work_sync(&ts->resume_work);
-#endif
-		nvt_irq_enable(false);
-		cancel_work_sync(&ts->power_supply_work);
-		destroy_workqueue(ts->event_wq);
-		ts->event_wq = NULL;
-	}
-	/* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
 
 #if NVT_DRIVER_INSERT_FRAME
 	hrtimer_cancel(&ts->nvt_hrtimer);
 #endif
 
+#if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
+	if (ts->event_wq)
+		cancel_work_sync(&ts->resume_work);
+#endif
 #if NVT_TOUCH_ESD_PROTECT
 	if (nvt_esd_check_wq) {
 		cancel_delayed_work_sync(&nvt_esd_check_work);
@@ -4842,6 +4781,13 @@ static void nvt_ts_shutdown(struct spi_device *client)
 		nvt_esd_check_wq = NULL;
 	}
 #endif /* #if NVT_TOUCH_ESD_PROTECT */
+
+	if (ts->event_wq) {
+		nvt_irq_enable(false);
+		cancel_work_sync(&ts->charge_restore_work);
+		destroy_workqueue(ts->event_wq);
+		ts->event_wq = NULL;
+	}
 
 #if BOOT_UPDATE_FIRMWARE
 	if (nvt_fwu_wq) {
@@ -5124,6 +5070,10 @@ static int32_t nvt_ts_resume(struct device *dev)
 	queue_delayed_work(nvt_esd_check_wq, &nvt_esd_check_work,
 			msecs_to_jiffies(NVT_TOUCH_ESD_CHECK_PERIOD));
 #endif /* #if NVT_TOUCH_ESD_PROTECT */
+	/* Common PM restores the latest charge state after its 27/1010 messages.
+	 * Retire an asleep WDT request before exposing awake to its queued worker.
+	 */
+	ts->charge_restore_pending = false;
 	bTouchIsAwake = 1;
 	WRITE_ONCE(ts->display_suspend_ready, false);
 /*P16 code for BUGP16-2768 by xiongdejun at 2025/5/26 start*/
@@ -5152,12 +5102,6 @@ static int32_t nvt_ts_resume(struct device *dev)
 	}
 	mutex_unlock(&ts->lock);
 /*P16 code for HQFEAT-89815 by liaoxianguo at 2025/4/1 end*/
-/*P16 code for BUGP16-3227 by p-liaoxianguo at 2025/6/4 start*/
-	mutex_lock(&ts->lock);
-	nvt_set_charger_switch(ts->charger_status_store);
-	NVT_LOG("nvt charger mode is %d in resume\n",ts->charger_status_store);
-	mutex_unlock(&ts->lock);
-/*P16 code for BUGP16-3227 by p-liaoxianguo at 2025/6/4 end*/
 	if (hold_wakeup)
 		pm_relax(dev);
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)

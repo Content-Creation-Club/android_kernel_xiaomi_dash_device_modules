@@ -257,6 +257,13 @@ struct xiaomi_touch_panel_data {
 	bool registered;
 	bool panel_notifier_registered;
 	bool suspended;
+	bool pm_resume;
+	bool pm_async_suspend;
+	bool charge_notifier_registered;
+	bool charge_initialized;
+	int charge_state;
+	struct notifier_block charge_notifier;
+	struct work_struct charge_work;
 	struct device *dev;
 	struct notifier_block panel_notifier;
 	struct workqueue_struct *pm_wq;
@@ -314,7 +321,7 @@ extern void xiaomi_touch_remove_info_proc_common(int touch_id);
 extern int get_bms_temp_common(void);
 extern void enable_temperature_detection_func(bool enable);
 extern void stop_temperature_detection_func(void);
-extern void xiaomi_touch_set_temperature_charge_state(int charging);
+extern int xiaomi_touch_get_charge_state(int touch_id);
 extern int xiaomi_register_panel_notifier_common(struct device *dev,
 		int touch_id);
 extern void xiaomi_unregister_panel_notifier_common(int touch_id);
