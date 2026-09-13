@@ -702,7 +702,7 @@ static void xiaomi_touch_set_mode(struct xiaomi_touch_panel_data *panel,
 				       1, &notification);
 		break;
 	case Touch_Power_Status:
-		xiaomi_touch_request_pm(panel, values[0] & 1, true);
+		xiaomi_touch_request_pm(panel, !!values[0], true);
 		break;
 	case Touch_Debug_Level:
 		mi_ts_err("mode %d cached; common log action not implemented", mode);
