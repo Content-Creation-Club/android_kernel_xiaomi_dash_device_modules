@@ -127,7 +127,7 @@ static int __init mi_stack_init(void)
 		goto remove_pid;
 	proc_set_user(entry, KUIDT_INIT(1000), KGIDT_INIT(1000));
 
-	pr_info("mi_stack: %s succeed\n", __func__);
+	pr_err("mi_stack: %s succeed\n", __func__);
 	return 0;
 
 remove_pid:
@@ -142,7 +142,7 @@ static void __exit mi_stack_exit(void)
 	remove_proc_entry("stack", mi_stack_dir);
 	remove_proc_entry("pid", mi_stack_dir);
 	remove_proc_entry("mi_stack", NULL);
-	pr_info("mi_stack: %s\n", __func__);
+	pr_err("mi_stack: %s\n", __func__);
 }
 
 module_init(mi_stack_init);
