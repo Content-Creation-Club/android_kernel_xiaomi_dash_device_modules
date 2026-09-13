@@ -890,12 +890,12 @@ static int of_parse_thermal_message(void)
 
 	np = of_find_node_by_name(NULL, "thermal-message");
 	if (!np) {
-		printk(KERN_ERR "%s:Thermal: Can not parse thermal message node, return %d\n", __func__, -EINVAL);
+		printk(KERN_ERR "%s:Thermal: Can not parse thermal message node, return %d\n", "mi_thermal_interface_init", -EINVAL);
 		return -EINVAL;
 	}
 
 	if (of_property_read_string(np, "board-sensor", &board_sensor)) {
-		printk(KERN_ERR "%s:Thermal: Can not parse thermal message node, return %d\n", __func__, -EINVAL);
+		printk(KERN_ERR "%s:Thermal: Can not parse thermal message node, return %d\n", "mi_thermal_interface_init", -EINVAL);
 		return -EINVAL;
 	}
 
