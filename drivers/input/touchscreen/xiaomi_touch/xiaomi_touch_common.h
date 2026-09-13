@@ -21,6 +21,7 @@
 #include <linux/wait.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
+#include <linux/kref.h>
 #include <linux/mempolicy.h>
 #include <linux/dma-mapping.h>
 #include <linux/export.h>
@@ -256,6 +257,19 @@ struct xiaomi_touch_client {
 	atomic_t frame_data_index;
 	atomic_t raw_data_index;
 };
+/* Allocation metadata outlives the panel/device whenever a VMA still owns it. */
+struct xiaomi_touch_backing {
+	struct kref ref;
+	void *data;
+	size_t size;
+	phys_addr_t phys;
+};
+struct xiaomi_touch_backing *xiaomi_touch_backing_alloc(size_t size);
+void xiaomi_touch_backing_put(struct xiaomi_touch_backing *backing);
+/* Caller serializes the owner pointer against detach until this returns. */
+int xiaomi_touch_backing_mmap(struct xiaomi_touch_backing *backing,
+			      struct vm_area_struct *vma);
+
 struct xiaomi_touch_panel_data {
 	bool registered;
 	bool panel_notifier_registered;
@@ -291,13 +305,11 @@ struct xiaomi_touch_panel_data {
 	atomic_t frame_data_index;
 	size_t frame_data_size;
 	u8 frame_data_buf_size;
-	void *frame_data;
-	phys_addr_t frame_data_phys;
+	struct xiaomi_touch_backing *frame_data;
 	atomic_t raw_data_index;
 	size_t raw_data_size;
 	u8 raw_data_buf_size;
-	void *raw_data;
-	phys_addr_t raw_data_phys;
+	struct xiaomi_touch_backing *raw_data;
 	struct list_head client_list;
 	spinlock_t client_lock;
 	atomic_t common_data_index;

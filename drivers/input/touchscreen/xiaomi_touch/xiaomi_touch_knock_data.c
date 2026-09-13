@@ -6,9 +6,8 @@
 #define KNOCK_NODE_NAME         "xiaomi-touch-knock"
 struct knock_data {
 	struct miscdevice misc_dev;
-	unsigned int *raw_data;
+	struct xiaomi_touch_backing *raw_data;
 	int raw_data_length;
-	dma_addr_t phy_base;
 	int need_frame_count;
 	bool has_data_update;
 	bool registered;
@@ -40,7 +39,7 @@ void update_knock_data(u8 *buf, int size, int frame_id)
 	/* No producer is wired in this tree; a future producer must be sleepable. */
 	mutex_lock(&knock_lock);
 	if (knock_data.live && knock_data.raw_data) {
-		memcpy(knock_data.raw_data, buf, size);
+		memcpy(knock_data.raw_data->data, buf, size);
 		knock_data.raw_data_length = size;
 		knock_data.has_data_update = true;
 	}
@@ -163,14 +162,9 @@ static int knock_data_mmap(struct file *file, struct vm_area_struct *vma)
 	if (vma->vm_pgoff || !size || size > KNOCK_RAW_DATA_SIZE)
 		return -EINVAL;
 	mutex_lock(&knock_lock);
-	if (knock_file_live(file) && knock_data.raw_data) {
-		ret = remap_pfn_range(vma, vma->vm_start,
-				     knock_data.phy_base >> PAGE_SHIFT, size, PAGE_SHARED);
-		if (ret)
-			ret = -EAGAIN;
-	}
+	if (knock_file_live(file))
+		ret = xiaomi_touch_backing_mmap(knock_data.raw_data, vma);
 	mutex_unlock(&knock_lock);
-	/* VMA backing references (including clones) are the next batch. */
 	return ret;
 }
 
@@ -190,16 +184,17 @@ int knock_node_init(void)
 	int ret;
 
 	/* Common probe/remove serialize registration. No entry is live yet. */
-	knock_data.raw_data = kzalloc(KNOCK_RAW_DATA_SIZE, GFP_KERNEL);
+	if (knock_data.raw_data)
+		return -EBUSY;
+	knock_data.raw_data = xiaomi_touch_backing_alloc(KNOCK_RAW_DATA_SIZE);
 	if (!knock_data.raw_data)
 		return -ENOMEM;
-	knock_data.phy_base = virt_to_phys(knock_data.raw_data);
 	knock_data.misc_dev.minor = MISC_DYNAMIC_MINOR;
 	knock_data.misc_dev.name = KNOCK_NODE_NAME;
 	knock_data.misc_dev.fops = &xiaomi_knock_fops;
 	ret = misc_register(&knock_data.misc_dev);
 	if (ret) {
-		kfree(knock_data.raw_data);
+		xiaomi_touch_backing_put(knock_data.raw_data);
 		knock_data.raw_data = NULL;
 		return ret;
 	}
@@ -210,6 +205,10 @@ int knock_node_init(void)
 void knock_node_publish(void)
 {
 	mutex_lock(&knock_lock);
+	if (!knock_data.registered || knock_data.live) {
+		mutex_unlock(&knock_lock);
+		return;
+	}
 	knock_data.generation++;
 	knock_data.need_frame_count = 0;
 	knock_data.raw_data_length = 0;
@@ -231,8 +230,7 @@ void knock_node_release(void)
 		knock_data.registered = false;
 	}
 	mutex_lock(&knock_lock);
-	kfree(knock_data.raw_data);
+	xiaomi_touch_backing_put(knock_data.raw_data);
 	knock_data.raw_data = NULL;
-	knock_data.phy_base = 0;
 	mutex_unlock(&knock_lock);
 }

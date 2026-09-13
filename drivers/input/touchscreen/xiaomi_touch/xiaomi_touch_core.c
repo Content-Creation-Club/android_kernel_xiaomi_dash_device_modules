@@ -810,6 +810,88 @@ static void xiaomi_touch_set_long_mode(struct xiaomi_touch_panel_data *panel,
 	queue_work(panel->mode_wq, &panel->grid_work);
 }
 
+struct xiaomi_touch_backing *xiaomi_touch_backing_alloc(size_t size)
+{
+	struct xiaomi_touch_backing *backing;
+
+	backing = kzalloc(sizeof(*backing), GFP_KERNEL);
+	if (!backing)
+		return NULL;
+	backing->data = kzalloc(size, GFP_KERNEL);
+	if (!backing->data) {
+		kfree(backing);
+		return NULL;
+	}
+	backing->size = size;
+	backing->phys = virt_to_phys(backing->data);
+	kref_init(&backing->ref);
+	return backing;
+}
+
+static void xiaomi_touch_backing_release(struct kref *ref)
+{
+	struct xiaomi_touch_backing *backing = container_of(ref,
+			struct xiaomi_touch_backing, ref);
+
+	kfree(backing->data);
+	kfree(backing);
+}
+
+void xiaomi_touch_backing_put(struct xiaomi_touch_backing *backing)
+{
+	if (backing)
+		kref_put(&backing->ref, xiaomi_touch_backing_release);
+}
+
+static void xiaomi_touch_vma_open(struct vm_area_struct *vma)
+{
+	struct xiaomi_touch_backing *backing = vma->vm_private_data;
+
+	kref_get(&backing->ref);
+}
+
+static void xiaomi_touch_vma_close(struct vm_area_struct *vma)
+{
+	xiaomi_touch_backing_put(vma->vm_private_data);
+}
+
+static const struct vm_operations_struct xiaomi_touch_vm_ops = {
+	.open = xiaomi_touch_vma_open,
+	.close = xiaomi_touch_vma_close,
+};
+
+int xiaomi_touch_backing_mmap(struct xiaomi_touch_backing *backing,
+			      struct vm_area_struct *vma)
+{
+	unsigned long size, offset;
+
+	if (!backing)
+		return -ENODEV;
+	/* Reject the page offset before shifting: a large pgoff must not wrap. */
+	if (vma->vm_end <= vma->vm_start ||
+	    vma->vm_pgoff >= (backing->size >> PAGE_SHIFT))
+		return -EINVAL;
+	size = vma->vm_end - vma->vm_start;
+	offset = vma->vm_pgoff << PAGE_SHIFT;
+	if (size > backing->size - offset)
+		return -EINVAL;
+
+	/* mmap_region does not call ->open for the first mapping. Fork/split do.
+	 * vm_file keeps the misc file and its fops .owner alive through ->close.
+	 */
+	kref_get(&backing->ref);
+	if (remap_pfn_range(vma, vma->vm_start,
+			    (backing->phys >> PAGE_SHIFT) + vma->vm_pgoff,
+			    size, PAGE_SHARED)) {
+		xiaomi_touch_backing_put(backing);
+		return -EAGAIN;
+	}
+	/* remap_pfn_range already sets DONTEXPAND/DONTDUMP for this PFN mapping. */
+	vma->vm_private_data = backing;
+	vma->vm_ops = &xiaomi_touch_vm_ops;
+	return 0;
+}
+
 static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 		const hardware_param_t *hardware_param,
 		const hardware_operation_t *hardware_operation)
@@ -838,13 +920,13 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 	raw_total = (size_t)hardware_param->raw_data_page_size * PAGE_SIZE *
 		    hardware_param->raw_data_buf_size;
 
-	panel->frame_data = kzalloc(frame_total, GFP_KERNEL);
+	panel->frame_data = xiaomi_touch_backing_alloc(frame_total);
 	if (!panel->frame_data)
 		return -ENOMEM;
 
-	panel->raw_data = kzalloc(raw_total, GFP_KERNEL);
+	panel->raw_data = xiaomi_touch_backing_alloc(raw_total);
 	if (!panel->raw_data) {
-		kfree(panel->frame_data);
+		xiaomi_touch_backing_put(panel->frame_data);
 		panel->frame_data = NULL;
 		return -ENOMEM;
 	}
@@ -857,11 +939,9 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 	panel->frame_data_size =
 		(size_t)hardware_param->frame_data_page_size * PAGE_SIZE;
 	panel->frame_data_buf_size = hardware_param->frame_data_buf_size;
-	panel->frame_data_phys = virt_to_phys(panel->frame_data);
 	panel->raw_data_size =
 		(size_t)hardware_param->raw_data_page_size * PAGE_SIZE;
 	panel->raw_data_buf_size = hardware_param->raw_data_buf_size;
-	panel->raw_data_phys = virt_to_phys(panel->raw_data);
 	atomic_set(&panel->frame_data_index, 0);
 	atomic_set(&panel->raw_data_index, 0);
 	atomic_set(&panel->common_data_index, 0);
@@ -878,8 +958,8 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 	panel->mode_wq = alloc_ordered_workqueue("xiaomi_touch_mode_%d",
 			WQ_MEM_RECLAIM, touch_id);
 	if (!panel->mode_wq) {
-		kfree(panel->raw_data);
-		kfree(panel->frame_data);
+		xiaomi_touch_backing_put(panel->raw_data);
+		xiaomi_touch_backing_put(panel->frame_data);
 		panel->raw_data = NULL;
 		panel->frame_data = NULL;
 		memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
@@ -899,8 +979,8 @@ static int xiaomi_touch_register_panel(struct device *dev, int touch_id,
 	if (!panel->pm_wq) {
 		destroy_workqueue(panel->mode_wq);
 		panel->mode_wq = NULL;
-		kfree(panel->raw_data);
-		kfree(panel->frame_data);
+		xiaomi_touch_backing_put(panel->raw_data);
+		xiaomi_touch_backing_put(panel->frame_data);
 		panel->raw_data = NULL;
 		panel->frame_data = NULL;
 		memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
@@ -1063,11 +1143,15 @@ static void xiaomi_touch_unregister_panel(int touch_id)
 		return;
 	xiaomi_touch_stop_panel(touch_id);
 	panel = &touch_panel_data[touch_id];
-	/* The provider must stop its raw producer before releasing backing. */
-	kfree(panel->raw_data);
-	kfree(panel->frame_data);
+	/* NVT drains its IRQ before unregister (including probe failure/shutdown).
+	 * Stop alone retains this owner until that drain; existing VMAs own refs.
+	 */
+	mutex_lock(&touch_callback_lock);
+	xiaomi_touch_backing_put(panel->raw_data);
+	xiaomi_touch_backing_put(panel->frame_data);
 	panel->raw_data = NULL;
 	panel->frame_data = NULL;
+	mutex_unlock(&touch_callback_lock);
 }
 void unregister_touch_panel_common(int touch_id)
 {
@@ -1085,10 +1169,13 @@ void *get_raw_data_base_common(int touch_id)
 		return NULL;
 
 	panel = &touch_panel_data[touch_id];
-	if (!panel->registered)
+	if (!READ_ONCE(panel->registered))
 		return NULL;
 
-	return (u8 *)panel->frame_data + atomic_read(&panel->frame_data_index) *
+	/* Sole producer: NVT's threaded IRQ. Its owner survives every early return
+	 * until disable_irq/free_irq/synchronize_irq completes before unregister.
+	 */
+	return (u8 *)panel->frame_data->data + atomic_read_acquire(&panel->frame_data_index) *
 		panel->frame_data_size;
 }
 EXPORT_SYMBOL_GPL(get_raw_data_base_common);
@@ -1104,13 +1191,14 @@ void notify_raw_data_update_common(int touch_id)
 		return;
 
 	panel = &touch_panel_data[touch_id];
-	if (!panel->registered)
+	if (!READ_ONCE(panel->registered))
 		return;
 
-	smp_wmb();
-	index = atomic_inc_return(&panel->frame_data_index);
+	/* One hardware producer: publish payload and a valid mod-N cursor once. */
+	index = atomic_read_acquire(&panel->frame_data_index) + 1;
 	if (index >= panel->frame_data_buf_size)
-		atomic_set(&panel->frame_data_index, 0);
+		index = 0;
+	atomic_set_release(&panel->frame_data_index, index);
 
 	spin_lock_irqsave(&panel->client_lock, flags);
 	list_for_each_entry(client, &panel->client_list, node)
@@ -1216,10 +1304,10 @@ static unsigned int xiaomi_touch_dev_poll_locked(struct file *file,
 	    atomic_read(&panel->common_data_index))
 		mask |= POLLRDNORM;
 	if (atomic_read(&client->frame_data_index) !=
-	    atomic_read(&panel->frame_data_index))
+	    atomic_read_acquire(&panel->frame_data_index))
 		mask |= POLLPRI;
 	if (atomic_read(&client->raw_data_index) !=
-	    atomic_read(&panel->raw_data_index))
+	    atomic_read_acquire(&panel->raw_data_index))
 		mask |= POLLRDBAND;
 
 	return mask;
@@ -1417,9 +1505,9 @@ static long xiaomi_touch_dev_ioctl_locked(struct file *file, unsigned int cmd,
 
 		client->touch_id = touch_id;
 		atomic_set(&client->frame_data_index,
-			   atomic_read(&panel->frame_data_index));
+			   atomic_read_acquire(&panel->frame_data_index));
 		atomic_set(&client->raw_data_index,
-			   atomic_read(&panel->raw_data_index));
+			   atomic_read_acquire(&panel->raw_data_index));
 		spin_lock_irqsave(&panel->client_lock, flags);
 		list_add_tail(&client->node, &panel->client_list);
 		spin_unlock_irqrestore(&panel->client_lock, flags);
@@ -1433,7 +1521,7 @@ static long xiaomi_touch_dev_ioctl_locked(struct file *file, unsigned int cmd,
 		if (!panel->registered)
 			return -1;
 		index = atomic_read(&client->frame_data_index);
-		if (index == atomic_read(&panel->frame_data_index))
+		if (index == atomic_read_acquire(&panel->frame_data_index))
 			return -1;
 		ret = index;
 		if (++index >= panel->frame_data_buf_size)
@@ -1450,7 +1538,7 @@ static long xiaomi_touch_dev_ioctl_locked(struct file *file, unsigned int cmd,
 			return -1;
 		if (_IOC_DIR(cmd) == _IOC_READ) {
 			index = atomic_read(&client->raw_data_index);
-			if (index == atomic_read(&panel->raw_data_index))
+			if (index == atomic_read_acquire(&panel->raw_data_index))
 				return -1;
 			ret = index;
 			if (++index >= panel->raw_data_buf_size)
@@ -1459,10 +1547,13 @@ static long xiaomi_touch_dev_ioctl_locked(struct file *file, unsigned int cmd,
 			return ret;
 		}
 		if (_IOC_DIR(cmd) == _IOC_WRITE) {
-			smp_wmb();
-			index = atomic_inc_return(&panel->raw_data_index);
+			/* touch_callback_lock serializes all delta publishers and fd
+			 * selection/consumption; no lost read-modify-write increment.
+			 */
+			index = atomic_read_acquire(&panel->raw_data_index) + 1;
 			if (index >= panel->raw_data_buf_size)
-				atomic_set(&panel->raw_data_index, 0);
+				index = 0;
+			atomic_set_release(&panel->raw_data_index, index);
 			spin_lock_irqsave(&panel->client_lock, flags);
 			list_for_each_entry(client, &panel->client_list, node)
 				wake_up_all(&client->poll_wait_queue_head);
@@ -1489,10 +1580,7 @@ static int xiaomi_touch_dev_mmap_locked(struct file *file, struct vm_area_struct
 {
 	struct xiaomi_touch_client *client = file->private_data;
 	struct xiaomi_touch_panel_data *panel;
-	phys_addr_t phys;
-	size_t total;
-	unsigned long size = vma->vm_end - vma->vm_start;
-	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+	struct xiaomi_touch_backing *backing;
 
 	if (!client || client->touch_id < 0)
 		return -EINVAL;
@@ -1503,26 +1591,16 @@ static int xiaomi_touch_dev_mmap_locked(struct file *file, struct vm_area_struct
 
 	switch (client->mmap_area) {
 	case XIAOMI_TOUCH_MMAP_FRAME:
-		phys = panel->frame_data_phys;
-		total = panel->frame_data_size * panel->frame_data_buf_size;
+		backing = panel->frame_data;
 		break;
 	case XIAOMI_TOUCH_MMAP_RAW:
-		phys = panel->raw_data_phys;
-		total = panel->raw_data_size * panel->raw_data_buf_size;
+		backing = panel->raw_data;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	if (offset > total || size > total - offset)
-		return -EINVAL;
-
-	if (remap_pfn_range(vma, vma->vm_start,
-			    (phys + offset) >> PAGE_SHIFT, size,
-			    PAGE_SHARED))
-		return -EAGAIN;
-
-	return 0;
+	return xiaomi_touch_backing_mmap(backing, vma);
 }
 
 static int xiaomi_touch_dev_mmap(struct file *file, struct vm_area_struct *vma)
