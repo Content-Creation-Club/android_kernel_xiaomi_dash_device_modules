@@ -247,6 +247,7 @@ struct xiaomi_touch_pdata {
 };
 struct xiaomi_touch_client {
 	u64 generation;
+	bool dead;
 	struct list_head node;
 	u8 mmap_area;
 	s8 touch_id;

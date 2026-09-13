@@ -537,6 +537,9 @@ static ssize_t xiaomi_touch_info_write(struct file *file, const char __user *buf
 					break;
 			}
 		}
+		xiaomi_touch_format_info(panel, name, file->private_data);
+		*pos = 0;
+		file->f_pos = 0;
 	}
 out:
 	mutex_unlock(&touch_callback_lock);
@@ -1016,6 +1019,15 @@ static void xiaomi_touch_stop_panel(int touch_id)
 		data->touch_dfs_test = NULL;
 #endif
 	}
+	/* Revoke selected fds permanently before dropping callback lifetime. */
+	spin_lock_irqsave(&panel->client_lock, flags);
+	list_for_each_entry_safe(client, next, &panel->client_list, node) {
+		list_del_init(&client->node);
+		WRITE_ONCE(client->dead, true);
+		client->touch_id = -1;
+		wake_up_all(&client->poll_wait_queue_head);
+	}
+	spin_unlock_irqrestore(&panel->client_lock, flags);
 	mutex_unlock(&touch_callback_lock);
 	xiaomi_touch_remove_info_proc(touch_id);
 	cancel_work_sync(&panel->resume_work);
@@ -1029,13 +1041,6 @@ static void xiaomi_touch_stop_panel(int touch_id)
 	panel->mode_wq = NULL;
 	if (touch_id == 0)
 		stop_temperature_detection_func();
-	spin_lock_irqsave(&panel->client_lock, flags);
-	list_for_each_entry_safe(client, next, &panel->client_list, node) {
-		list_del_init(&client->node);
-		client->touch_id = -1;
-		wake_up_all(&client->poll_wait_queue_head);
-	}
-	spin_unlock_irqrestore(&panel->client_lock, flags);
 
 	mutex_lock(&touch_callback_lock);
 	memset(&panel->hardware_operation, 0, sizeof(panel->hardware_operation));
@@ -1141,7 +1146,7 @@ static bool xiaomi_touch_client_live(struct file *file)
 {
 	struct xiaomi_touch_client *client = file->private_data;
 
-	return xiaomi_touch_probe_finished && client &&
+	return xiaomi_touch_probe_finished && client && !READ_ONCE(client->dead) &&
 		client->generation == touch_generation;
 }
 
@@ -1540,7 +1545,8 @@ static int xiaomi_touch_dev_release(struct inode *inode, struct file *file)
 		return 0;
 
 	mutex_lock(&touch_callback_lock);
-	if (client->touch_id >= 0 && client->generation == touch_generation) {
+	if (!READ_ONCE(client->dead) && client->touch_id >= 0 &&
+	    client->generation == touch_generation) {
 		panel = &touch_panel_data[client->touch_id];
 		spin_lock_irqsave(&panel->client_lock, flags);
 		if (!list_empty(&client->node))
@@ -3788,6 +3794,8 @@ static struct platform_driver xiaomi_touch_device_driver = {
 	.remove		= xiaomi_touch_remove,
 	.driver		= {
 		.name	= "xiaomi-touch",
+		/* Independent rebind cannot re-register an already-bound provider. */
+		.suppress_bind_attrs = true,
 		.of_match_table = of_match_ptr(xiaomi_touch_of_match),
 	}
 };
