@@ -714,7 +714,7 @@ static int32_t nvt_download_firmware_hw_crc(uint8_t skip_update_ilm)
 		/* Set Boot Ready Bit */
 		nvt_boot_ready();
 
-		ret = nvt_check_fw_reset_state(RESET_STATE_REK);
+		ret = nvt_check_fw_reset_state(RESET_STATE_INIT);
 		if (ret) {
 			NVT_ERR("nvt_check_fw_reset_state failed. (%d)\n", ret);
 			goto fail;
@@ -726,9 +726,9 @@ fail:
 		skip_update_ilm = false;
 		retry++;
 /*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 start*/
-		NVT_ERR("error, retry=%d\n", retry);
-		nvt_read_bld_hw_crc();
 		if(unlikely(retry > 2)) {
+			NVT_ERR("error, retry=%d\n", retry);
+			nvt_read_bld_hw_crc();
 /*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 end*/
 			break;
 		}
@@ -749,13 +749,9 @@ return:
 int32_t nvt_update_firmware(char *firmware_name, uint8_t skip_update_ilm)
 {
 	int32_t ret = 0;
-/*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 start*/
-	int32_t retry = 0;
 
 	WRITE_ONCE(ts->firmware_loading, true);
 
-retry_update_firmware:
-/*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 end*/
 #if !NVT_TRY_SKIP_UPDATE_ILM
 	skip_update_ilm = false;
 #endif
@@ -782,16 +778,7 @@ retry_update_firmware:
 	/* download firmware process */
 	ret = nvt_download_firmware_hw_crc(skip_update_ilm);
 	if (ret) {
-/*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 start*/
-		if (retry > 0) {
-			NVT_ERR("Download Firmware failed. (%d)\n", ret);
-/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 start*/
-#if IS_ENABLED(CONFIG_MIEV)
-			xiaomi_touch_mievent_report_str(TOUCH_EVENT_FWLOAD_ERR, 0, "TpFirmwareLoadFail", "novatek");
-#endif
-/*P16 code for HQFEAT-89149 by xiongdejun at 2024/4/25 end*/
-		}
-/*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 end*/
+		NVT_ERR("Download Firmware failed. (%d)\n", ret);
 		goto download_fail;
 	}
 
@@ -799,10 +786,11 @@ retry_update_firmware:
 			(long) ktime_us_delta(end, start));
 
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_COMMON)
-	ret = nvt_get_xm_htc_poll_info();
-	if (ret) {
-		NVT_ERR("nvt_get_xm_htc_poll_info failed. (%d)\n", ret);
-		goto download_fail;
+	if (ts->touch_raw_enabled && !ts->thp_poll_info_attempted) {
+		ret = nvt_get_xm_htc_poll_info();
+		if (ret)
+			NVT_ERR("nvt_get_xm_htc_poll_info failed. (%d)\n", ret);
+		ts->thp_poll_info_attempted = true;
 	}
 #endif
 
@@ -820,12 +808,6 @@ download_fail:
 
 	update_firmware_release();
 request_firmware_fail:
-/*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 start*/
-	if ((ret) && (retry < 1)) {
-		retry++;
-		goto retry_update_firmware;
-	}
-/*P16 code for BUGP16-9011 by liuyupei at 2025/7/24 end*/
 	WRITE_ONCE(ts->firmware_loading, false);
 	return ret;
 }

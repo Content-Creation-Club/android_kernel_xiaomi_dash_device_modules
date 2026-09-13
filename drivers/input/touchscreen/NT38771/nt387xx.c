@@ -1134,7 +1134,7 @@ int32_t nvt_set_extend_custom_cmd(uint8_t command, uint16_t value)
 
 	if (!ts)
 		return -ENODEV;
-	if (ts->nvt_tool_in_use)
+	if (READ_ONCE(ts->firmware_loading) || ts->nvt_tool_in_use)
 		return -EBUSY;
 
 	ret = nvt_set_page(ts->mmap->EVENT_BUF_ADDR | EVENT_MAP_HOST_CMD);
@@ -1168,7 +1168,7 @@ int32_t nvt_set_extend_custom_cmd(uint8_t command, uint16_t value)
 	NVT_ERR("send extend cmd 0x%02X failed, status=0x%02X\n",
 		command, status);
 	nvt_read_fw_history_all();
-	return -EIO;
+	return -1;
 }
 
 int32_t nvt_get_extend_custom_cmd(uint8_t command, uint16_t *value)
@@ -1182,7 +1182,7 @@ int32_t nvt_get_extend_custom_cmd(uint8_t command, uint16_t *value)
 		return -ENODEV;
 	if (!value)
 		return -EINVAL;
-	if (ts->nvt_tool_in_use)
+	if (READ_ONCE(ts->firmware_loading) || ts->nvt_tool_in_use)
 		return -EBUSY;
 
 	ret = nvt_set_page(ts->mmap->EVENT_BUF_ADDR | EVENT_MAP_HOST_CMD);
@@ -1217,7 +1217,7 @@ int32_t nvt_get_extend_custom_cmd(uint8_t command, uint16_t *value)
 	NVT_ERR("get extend cmd 0x%02X failed, status=0x%02X\n",
 		command, status);
 	nvt_read_fw_history_all();
-	return -EIO;
+	return -1;
 }
 
 /*******************************************************
@@ -2453,9 +2453,7 @@ int32_t nvt_get_xm_htc_poll_info(void)
 	u16 data_len;
 	int ret;
 
-	ret = nvt_set_page(ts->mmap->XBUF_SECTOR_ADDR);
-	if (ret < 0)
-		return ret;
+	nvt_set_page(ts->mmap->XBUF_SECTOR_ADDR);
 
 	poll_info[0] = ts->mmap->XBUF_SECTOR_ADDR & 0x7F;
 	ret = CTP_SPI_READ(ts->client, poll_info, sizeof(poll_info));
@@ -2473,8 +2471,7 @@ int32_t nvt_get_xm_htc_poll_info(void)
 		 ts->thp_data_len, ts->thp_data_len + NVT_THP_HEADER_LEN);
 
 restore_event_page:
-	if (nvt_set_page(ts->mmap->EVENT_BUF_ADDR) < 0 && !ret)
-		ret = -EIO;
+	nvt_set_page(ts->mmap->EVENT_BUF_ADDR);
 
 	return ret;
 }
@@ -2485,10 +2482,7 @@ static int nvt_report_thp_frame(void)
 	u16 data_len = ts->thp_data_len;
 	int ret;
 
-	if (!data_len)
-		data_len = NVT_THP_DATA_LEN;
-
-	memset(ts->thp_frame_buf, 0, NVT_THP_FRAME_BUF_LEN);
+	ts->thp_frame_buf[0] = 0;
 	ret = CTP_SPI_READ(ts->client, ts->thp_frame_buf,
 			   data_len + NVT_THP_HEADER_LEN);
 	if (ret < 0)
@@ -2530,7 +2524,7 @@ static int nvt_report_thp_frame(void)
 	frame->frame_count = ts->thp_frame_count++;
 	frame->frame_type = ts->fod_finger; /* Stock frame header carries FOD state. */
 	frame->status = 0;
-	memcpy(frame->tp_raw, ts->thp_frame_buf + 0x101, NVT_THP_DATA_LEN);
+	memcpy(frame->tp_raw, ts->thp_frame_buf + 0x101, data_len);
 	notify_raw_data_update_common(0);
 
 	return 0;

@@ -274,6 +274,7 @@ struct nvt_ts_data {
 	bool selftest_scan_pending;
 	bool doze_analysis_active;
 	bool touch_raw_enabled;
+	bool thp_poll_info_attempted;
 	bool firmware_loading;
 	struct work_struct resume_work;
 /* P16 code for HQFEAT-90108 by liuyupei at 2025/4/1 end */
