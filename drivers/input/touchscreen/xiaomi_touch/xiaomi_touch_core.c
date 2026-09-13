@@ -1399,9 +1399,11 @@ record_error:
 	/* input_register_handler calls connect synchronously under input_mutex
 	 * but discards its error. Other tasks' hotplug attempts are not part of
 	 * this registration, even before input_register_handler returns to us.
+	 * Only EV_ABS devices can produce timeline records; pure-key failures
+	 * must not revoke otherwise working or future collection.
 	 */
 	spin_lock_irqsave(&touch_timeline_lock, flags);
-	if (touch_timeline_registering == current)
+	if (touch_timeline_registering == current && test_bit(EV_ABS, dev->evbit))
 		touch_timeline_connect_error = ret;
 	spin_unlock_irqrestore(&touch_timeline_lock, flags);
 	return ret;
