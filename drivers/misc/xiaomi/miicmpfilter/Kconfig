@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config XIAOMI_MIICMPFILTER
+	tristate "Xiaomi ICMP unreachable notifier"
+	depends on INET && NETFILTER
+	help
+	  Notify privileged generic-netlink listeners about IPv4 ICMP
+	  destination-unreachable packets leaving wlan0 or wlan1.
