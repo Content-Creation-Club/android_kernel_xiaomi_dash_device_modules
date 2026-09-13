@@ -1225,7 +1225,6 @@ def get_overlay_modules_list():
         mgk_64_device_modules.append("drivers/misc/xiaomi/millet/millet_pkg.ko")
         mgk_64_device_modules.append("drivers/misc/xiaomi/millet/binder_gki.ko")
         mgk_64_device_modules.append("drivers/misc/xiaomi/millet/millet_binder.ko")
-        mgk_64_device_modules.append("drivers/misc/xiaomi/millet_oem_cgroup/millet_oem_cgroup.ko")
         mgk_64_device_modules.append("drivers/input/fingerprint/xiaomi_spi_tee.ko")
         mgk_64_device_modules.remove("drivers/input/misc/aw_haptic/haptic.ko")
         mgk_64_device_modules.remove("drivers/input/misc/aac_haptic/aac_haptic.ko")
