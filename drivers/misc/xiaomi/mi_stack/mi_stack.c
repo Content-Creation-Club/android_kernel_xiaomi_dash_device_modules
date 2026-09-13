@@ -20,7 +20,7 @@
 #define MI_STACK_DEPTH 64
 #define MI_STACK_PID_BUFFER_SIZE 128
 
-static int selected_pid;
+static int selected_pid = -1;
 static char pid_buffer[MI_STACK_PID_BUFFER_SIZE];
 static struct proc_dir_entry *mi_stack_dir;
 static DEFINE_MUTEX(mi_stack_lock);
