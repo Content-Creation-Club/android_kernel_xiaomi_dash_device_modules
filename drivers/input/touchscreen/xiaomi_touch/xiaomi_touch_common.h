@@ -52,6 +52,7 @@
 #define XIAOMI_TOUCH_MAX_PANEL	2
 #define XIAOMI_TOUCH_MMAP_FRAME	1
 #define XIAOMI_TOUCH_MMAP_RAW	2
+#define XIAOMI_TOUCH_MMAP_TIMELINE	3
 #define TOUCH_FOD_SUPPORT 1
 #define FOD_TEST_BASE 10
 extern int current_log_level;
@@ -344,6 +345,8 @@ extern int update_touch_rawdata(void);
 extern void get_current_timestamp(char* timebuf, int len);
 extern int update_clicktouch_raw(void);
 extern void last_touch_events_collect(int slot, int state);
+extern void add_input_event_timeline_before_event_time_common(int stage,
+		u64 frame_count, u64 time0, u64 time1);
 int xiaomi_touch_set_suspend_state(int state);
 struct drm_panel *xiaomi_touch_check_panel(void);
 void add_common_data_to_buf(s8 touch_id, enum common_data_cmd cmd, enum common_data_mode mode, int length, int *data);

@@ -8,6 +8,8 @@
 #include <linux/kthread.h>
 #include <linux/power_supply.h>
 #include <linux/types.h>
+#include <linux/input.h>
+#include <linux/math64.h>
 #include <asm/unaligned.h>
 #include <net/sock.h>
 #include <net/netlink.h>
@@ -1285,9 +1287,228 @@ static ssize_t xiaomi_touch_dev_read(struct file *file, char __user *buf, size_t
 	mutex_unlock(&touch_callback_lock);
 	return ret;
 }
+/* Stock packed ABI: 120 slots of 0x5c3 bytes in a 180 KiB allocation.
+ * Only the witnessed fields are written; the remaining bytes are opaque.
+ */
+#define TOUCH_TIMELINE_SIZE 0x2d000
+#define TOUCH_TIMELINE_SLOTS 120
+#define TOUCH_TIMELINE_STRIDE 0x5c3
+#define TOUCH_TIMELINE_FRAMES 20
+static struct xiaomi_touch_backing *touch_timeline;
+static DEFINE_SPINLOCK(touch_timeline_lock);
+static unsigned int touch_timeline_index, touch_timeline_count;
+static u64 touch_timeline_frame;
+static s64 touch_timeline_timestamp;
+
+void add_input_event_timeline_before_event_time_common(int stage,
+		u64 frame_count, u64 time0, u64 time1)
+{
+	unsigned long flags;
+	unsigned int index;
+	u8 *slot;
+
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	if (!touch_timeline)
+		goto out;
+	slot = (u8 *)touch_timeline->data +
+		touch_timeline_index * TOUCH_TIMELINE_STRIDE;
+	if (!stage) {
+		if (touch_timeline_count >= TOUCH_TIMELINE_FRAMES)
+			goto out;
+		index = touch_timeline_count++;
+		touch_timeline_frame = frame_count;
+		put_unaligned_le64(time0, slot + 1 + index * 8);
+		put_unaligned_le64(time1, slot + 0xa1 + index * 8);
+		put_unaligned_le64(0, slot + 0x141 + index * 8);
+		put_unaligned_le64(0, slot + 0x1e1 + index * 8);
+		WRITE_ONCE(slot[0], touch_timeline_count);
+	} else {
+		/* Do not trust the writable mapping's count, or truncate a hostile
+		 * 64-bit frame delta to the stock low-32-bit index.
+		 */
+		if (frame_count > touch_timeline_frame ||
+		    touch_timeline_frame - frame_count >= touch_timeline_count)
+			goto out;
+		index = touch_timeline_count - 1 - (touch_timeline_frame - frame_count);
+		put_unaligned_le64(time0, slot + 0x141 + index * 8);
+		put_unaligned_le64(time1, slot + 0x1e1 + index * 8);
+	}
+out:
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
+}
+EXPORT_SYMBOL_GPL(add_input_event_timeline_before_event_time_common);
+
+static void xiaomitouch_input_event(struct input_handle *handle,
+		unsigned int type, unsigned int code, int value)
+{
+	unsigned long flags;
+	s64 timestamp;
+	u8 *slot;
+
+	if (type != EV_ABS)
+		return;
+	/* Stock reads input_dev+0x628 (timestamp[INPUT_CLK_REAL] in ACK
+	 * 6.6's arm64 layout), not a new callback-time clock sample.
+	 */
+	timestamp = ktime_to_ns(handle->dev->timestamp[INPUT_CLK_REAL]);
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	if (!touch_timeline || !timestamp || timestamp == touch_timeline_timestamp)
+		goto out;
+	touch_timeline_timestamp = timestamp;
+	slot = (u8 *)touch_timeline->data +
+		touch_timeline_index * TOUCH_TIMELINE_STRIDE;
+	put_unaligned_le64(div_s64(timestamp, 1000) * 1000, slot + 0x281);
+	put_unaligned_le16(0x100, slot + 0x2a1);
+	touch_timeline_index = (touch_timeline_index + 1) % TOUCH_TIMELINE_SLOTS;
+	touch_timeline_count = 0;
+	slot = (u8 *)touch_timeline->data +
+		touch_timeline_index * TOUCH_TIMELINE_STRIDE;
+	WRITE_ONCE(slot[0], 0);
+out:
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
+}
+
+static int xiaomitouch_input_connect(struct input_handler *handler,
+		struct input_dev *dev, const struct input_device_id *id)
+{
+	struct input_handle *handle;
+	int ret;
+
+	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
+	if (!handle)
+		return -ENOMEM;
+	handle->dev = dev;
+	handle->handler = handler;
+	handle->name = "xiaomitouch";
+	ret = input_register_handle(handle);
+	if (ret)
+		goto free_handle;
+	ret = input_open_device(handle);
+	if (!ret)
+		return 0;
+	input_unregister_handle(handle);
+free_handle:
+	kfree(handle);
+	return ret;
+}
+
+static void xiaomitouch_input_disconnect(struct input_handle *handle)
+{
+	input_close_device(handle);
+	input_unregister_handle(handle);
+	kfree(handle);
+}
+
+static const struct input_device_id xiaomitouch_ids[] = {
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_ABSBIT,
+		.evbit = { BIT_MASK(EV_ABS) },
+		.absbit = { BIT_MASK(ABS_MT_POSITION_X) | BIT_MASK(ABS_MT_POSITION_Y) },
+	},
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_KEYBIT | INPUT_DEVICE_ID_MATCH_ABSBIT,
+		.keybit = { [BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH) },
+		.absbit = { BIT_MASK(ABS_X) | BIT_MASK(ABS_Y) },
+	},
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_EVBIT,
+		.evbit = { BIT_MASK(EV_KEY) },
+	},
+	{ },
+};
+
+static struct input_handler xiaomitouch_input_handler = {
+	.event = xiaomitouch_input_event,
+	.connect = xiaomitouch_input_connect,
+	.disconnect = xiaomitouch_input_disconnect,
+	.name = "xiaomitouch",
+	.id_table = xiaomitouch_ids,
+};
+
+/* Caller holds lifecycle_lock. Register/open/close can sleep and must never
+ * run under callback_lock or timeline_lock. The input callback only takes
+ * timeline_lock; mmap takes callback_lock, and owner changes take both.
+ */
+static int init_input_event_timeline(void)
+{
+	struct xiaomi_touch_backing *backing;
+	unsigned long flags;
+	int ret;
+
+	if (touch_timeline)
+		return 1;
+	backing = xiaomi_touch_backing_alloc(TOUCH_TIMELINE_SIZE);
+	if (!backing)
+		return 0;
+	ret = input_register_handler(&xiaomitouch_input_handler);
+	if (ret) {
+		xiaomi_touch_backing_put(backing);
+		return 0;
+	}
+	mutex_lock(&touch_callback_lock);
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	touch_timeline_index = 0;
+	touch_timeline_count = 0;
+	touch_timeline_frame = 0;
+	touch_timeline_timestamp = 0;
+	touch_timeline = backing;
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
+	mutex_unlock(&touch_callback_lock);
+	return 1;
+}
+
+static void release_input_event_timeline(void)
+{
+	struct xiaomi_touch_backing *backing;
+	unsigned long flags;
+
+	mutex_lock(&touch_callback_lock);
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	backing = touch_timeline;
+	touch_timeline = NULL;
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
+	mutex_unlock(&touch_callback_lock);
+	if (backing) {
+		input_unregister_handler(&xiaomitouch_input_handler);
+		xiaomi_touch_backing_put(backing);
+	}
+}
+
 static ssize_t xiaomi_touch_dev_write(struct file *file,
 				const char __user *buf, size_t count, loff_t *pos)
 {
+	u8 command[32];
+	int enabled = 0;
+	bool live;
+
+	/* Other lengths/unknown commands/copy failures still consume count. */
+	if (count != 32 && count != 22 && count != 23)
+		return count;
+	if (copy_from_user(command, buf, count))
+		return count;
+	mutex_lock(&touch_lifecycle_lock);
+	mutex_lock(&touch_callback_lock);
+	live = xiaomi_touch_client_live(file);
+	mutex_unlock(&touch_callback_lock);
+	if (!live)
+		goto out;
+	if (count == 32) {
+		if (!memcmp(command, "thp_time", 8))
+			add_input_event_timeline_before_event_time_common(1,
+				get_unaligned_le64(command + 24),
+				get_unaligned_le64(command + 8),
+				get_unaligned_le64(command + 16));
+	} else if (!memcmp(command, "enable_input_timeline", 21)) {
+		if (command[21] == '1')
+			enabled = init_input_event_timeline();
+		else if (command[21] == '0')
+			release_input_event_timeline();
+		mutex_lock(&touch_callback_lock);
+		add_common_data_to_buf(0, 0, 1090, 1, &enabled);
+		mutex_unlock(&touch_callback_lock);
+	}
+out:
+	mutex_unlock(&touch_lifecycle_lock);
 	return count;
 }
 static unsigned int xiaomi_touch_dev_poll_locked(struct file *file,
@@ -1587,6 +1808,8 @@ static int xiaomi_touch_dev_mmap_locked(struct file *file, struct vm_area_struct
 	struct xiaomi_touch_panel_data *panel;
 	struct xiaomi_touch_backing *backing;
 
+	if (client && client->mmap_area == XIAOMI_TOUCH_MMAP_TIMELINE)
+		return xiaomi_touch_backing_mmap(touch_timeline, vma);
 	if (!client || client->touch_id < 0)
 		return -EINVAL;
 
@@ -3850,6 +4073,7 @@ static int xiaomi_touch_remove(struct platform_device *pdev)
 	mutex_unlock(&touch_callback_lock);
 	mutex_unlock(&xiaomi_touch_dev.mutex);
 	/* No rundown under callback_lock: sysfs/proc callbacks acquire it. */
+	release_input_event_timeline();
 	knock_node_release();
 	misc_deregister(&xiaomi_touch_dev.misc_dev);
 	sysfs_remove_group(&xiaomi_touch_dev.dev->kobj, &xiaomi_touch_dev.attrs);
