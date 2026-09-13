@@ -13,7 +13,7 @@
 #include <linux/sched/task.h>
 #include <linux/uaccess.h>
 #include <linux/user_namespace.h>
-#include <drivers/android/binder_internal.h>
+#include <binder_internal.h>
 #include <trace/hooks/binder.h>
 
 #include "millet.h"

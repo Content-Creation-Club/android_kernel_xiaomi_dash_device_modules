@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+ccflags-y += -I$(srctree)/drivers/android
+
 obj-$(CONFIG_XIAOMI_MILLET_CORE) += millet_core.o
 obj-$(CONFIG_XIAOMI_MILLET_HS) += millet_hs.o
 obj-$(CONFIG_XIAOMI_MILLET_SIG) += millet_sig.o
