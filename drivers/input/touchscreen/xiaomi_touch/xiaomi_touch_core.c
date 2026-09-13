@@ -1299,6 +1299,9 @@ static DEFINE_SPINLOCK(touch_timeline_lock);
 static unsigned int touch_timeline_index, touch_timeline_count;
 static u64 touch_timeline_frame;
 static s64 touch_timeline_timestamp;
+/* Protected by timeline_lock, including the gap after input_mutex unlocks. */
+static struct task_struct *touch_timeline_registering;
+static int touch_timeline_connect_error;
 
 void add_input_event_timeline_before_event_time_common(int stage,
 		u64 frame_count, u64 time0, u64 time1)
@@ -1347,10 +1350,10 @@ static void xiaomitouch_input_event(struct input_handle *handle,
 
 	if (type != EV_ABS)
 		return;
-	/* Stock reads input_dev+0x628 (timestamp[INPUT_CLK_REAL] in ACK
+	/* Stock reads input_dev+0x628 (timestamp[INPUT_CLK_MONO] in ACK
 	 * 6.6's arm64 layout), not a new callback-time clock sample.
 	 */
-	timestamp = ktime_to_ns(handle->dev->timestamp[INPUT_CLK_REAL]);
+	timestamp = ktime_to_ns(handle->dev->timestamp[INPUT_CLK_MONO]);
 	spin_lock_irqsave(&touch_timeline_lock, flags);
 	if (!touch_timeline || !timestamp || timestamp == touch_timeline_timestamp)
 		goto out;
@@ -1372,11 +1375,14 @@ static int xiaomitouch_input_connect(struct input_handler *handler,
 		struct input_dev *dev, const struct input_device_id *id)
 {
 	struct input_handle *handle;
+	unsigned long flags;
 	int ret;
 
 	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
-	if (!handle)
-		return -ENOMEM;
+	if (!handle) {
+		ret = -ENOMEM;
+		goto record_error;
+	}
 	handle->dev = dev;
 	handle->handler = handler;
 	handle->name = "xiaomitouch";
@@ -1389,6 +1395,15 @@ static int xiaomitouch_input_connect(struct input_handler *handler,
 	input_unregister_handle(handle);
 free_handle:
 	kfree(handle);
+record_error:
+	/* input_register_handler calls connect synchronously under input_mutex
+	 * but discards its error. Other tasks' hotplug attempts are not part of
+	 * this registration, even before input_register_handler returns to us.
+	 */
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	if (touch_timeline_registering == current)
+		touch_timeline_connect_error = ret;
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
 	return ret;
 }
 
@@ -1433,14 +1448,26 @@ static int init_input_event_timeline(void)
 {
 	struct xiaomi_touch_backing *backing;
 	unsigned long flags;
-	int ret;
+	int ret, connect_error;
 
 	if (touch_timeline)
 		return 1;
 	backing = xiaomi_touch_backing_alloc(TOUCH_TIMELINE_SIZE);
 	if (!backing)
 		return 0;
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	touch_timeline_connect_error = 0;
+	touch_timeline_registering = current;
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
 	ret = input_register_handler(&xiaomitouch_input_handler);
+	spin_lock_irqsave(&touch_timeline_lock, flags);
+	connect_error = touch_timeline_connect_error;
+	touch_timeline_registering = NULL;
+	spin_unlock_irqrestore(&touch_timeline_lock, flags);
+	if (!ret && connect_error) {
+		input_unregister_handler(&xiaomitouch_input_handler);
+		ret = connect_error;
+	}
 	if (ret) {
 		xiaomi_touch_backing_put(backing);
 		return 0;
