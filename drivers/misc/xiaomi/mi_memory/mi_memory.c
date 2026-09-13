@@ -131,7 +131,7 @@ static struct dram_info *init_dram_info(void)
 		const char *name;
 	} vendors[] = {
 		{ 0x01, "SAMSUNG" }, { 0x03, "ELPIDA" },
-		{ 0x05, "NANYA" },   { 0x06, "SKhynix" },
+		{ 0x05, "NANYA" },   { 0x06, "SKHYNIX" },
 		{ 0x0e, "INTEL" },   { 0x13, "CXMT" },
 		{ 0xff, "MICRON" },
 	};
@@ -223,15 +223,13 @@ static int ufs_read_desc_param(struct ufs_hba *hba, enum desc_idn idn,
 	u8 data[8] = { 0 };
 	int ret;
 
-	if (!hba || !size || size > sizeof(data))
+	if (!hba || size > sizeof(data))
 		return -EINVAL;
-	ret = pm_runtime_resume_and_get(hba->dev);
-	if (ret < 0)
-		return ret;
+	pm_runtime_get_sync(hba->dev);
 	ret = ufshcd_read_desc_param_sel(hba, idn, 0, 0, offset, data, size);
-	pm_runtime_put(hba->dev);
+	pm_runtime_put_sync(hba->dev);
 	if (ret)
-		return ret;
+		return -EINVAL;
 
 	switch (size) {
 	case 1: *value = data[0]; break;
@@ -258,9 +256,7 @@ static int ufs_get_string_desc(struct ufs_hba *hba, char **result,
 		ret = -ENOMEM;
 		goto out;
 	}
-	ret = pm_runtime_resume_and_get(hba->dev);
-	if (ret < 0)
-		goto out;
+	pm_runtime_get_sync(hba->dev);
 	buf_len = UFS_DESC_MAX;
 	ret = ufshcd_query_descriptor_retry_xm(hba, UPIU_QUERY_OPCODE_READ_DESC,
 		QUERY_DESC_IDN_DEVICE, 0, 0, device_desc, &buf_len);
@@ -269,9 +265,10 @@ static int ufs_get_string_desc(struct ufs_hba *hba, char **result,
 		goto out_pm;
 	}
 	string_index = device_desc[device_offset];
-	buf_len = UFS_DESC_MAX;
+	pm_runtime_get_sync(hba->dev);
 	ret = ufshcd_read_desc_param_sel(hba, QUERY_DESC_IDN_STRING,
 		string_index, 0, 0, string_desc, UFS_DESC_MAX);
+	pm_runtime_put_sync(hba->dev);
 	if (ret) {
 		dev_err(hba->dev,
 			"Reading String Desc failed after %d retries. err = %d\n",
@@ -305,7 +302,7 @@ static int ufs_get_string_desc(struct ufs_hba *hba, char **result,
 done:
 	*result = out;
 out_pm:
-	pm_runtime_put(hba->dev);
+	pm_runtime_put_sync(hba->dev);
 out:
 	if (ret < 0)
 		kfree(out);
@@ -382,7 +379,7 @@ static int mv_proc_show(struct seq_file *m, void *unused)
 	else
 		seq_printf(m, "U: 0x%04x %d %s %s\n",
 			   mi_memory->ufs->manufacturer_id, mi_memory->ufs->capacity,
-			   mi_memory->ufs->model ?: "", mi_memory->ufs->revision ?: "");
+			   mi_memory->ufs->model, mi_memory->ufs->revision);
 	return 0;
 }
 
@@ -405,7 +402,7 @@ static ssize_t _name##_show(struct device *dev, struct device_attribute *attr, c
 		return sysfs_emit(buf, "dram_info is NULL\n"); \
 	return sysfs_emit(buf, _fmt "\n", g_dram_info->_field); \
 }
-DRAM_SHOW(ddr_size, "%u", ddr_size)
+DRAM_SHOW(ddr_size, "%d", ddr_size)
 DRAM_SHOW(ddr_id, "0x%02x", ddr_id)
 DRAM_SHOW(ddr_vendor, "%s", vendor)
 DRAM_SHOW(ddr_type, "0x%0x", ddr_type)
@@ -421,11 +418,9 @@ static int read_descriptor(struct ufs_hba *hba, enum desc_idn idn,
 {
 	int ret;
 
-	ret = pm_runtime_resume_and_get(hba->dev);
-	if (ret < 0)
-		return ret;
+	pm_runtime_get_sync(hba->dev);
 	ret = ufshcd_read_desc_param_sel(hba, idn, 0, 0, 0, buf, len);
-	pm_runtime_put(hba->dev);
+	pm_runtime_put_sync(hba->dev);
 	return ret;
 }
 
@@ -745,43 +740,49 @@ static void mi_hr_device_put(struct scsi_device *sdev)
 
 static int samsung_hr(struct scsi_device *sdev, u8 *data)
 {
-	u8 read_sdr[16] = { 0xc0, 0x40, 0, 0, 1, 0x0c, 0, 0, 0, 0, 0, 0x1c };
+	u8 read_sdr[16] = { 0xc0, 0x40, 0, 0, 1, 0x0c, [15] = 0x1c };
 	u8 enter[16] = { 0xc0, 0, 0x5c, 0x38, 0x23, 0xae, 0x67, 0x68, 0x72 };
 	u8 set_pwd[16] = { 0xc0, 3, 0x67, 0x68, 0x72 };
-	u8 read_osv[16] = { 0xc0, 0x40, 0, 0, 1, 0x0a, 0, 0, 0, 0, 0, 0x4c };
+	u8 read_osv[16] = { 0xc0, 0x40, 0, 0, 1, 0x0a, [15] = 0x4c };
 	u8 exit[16] = { 0xc0, 1 };
 	int ret;
 
 	ret = mi_scsi_exec(sdev, read_sdr, REQ_OP_DRV_IN, data, 0x1c, NULL,
 			   NULL);
 	if (ret) {
-		pr_err("ufs: get hr_inquiry result error 0x%x\n", ret);
+		pr_err("ufs: get osv result error 0x%x\n", ret);
 		return -EIO;
 	}
 	ret = mi_scsi_exec(sdev, enter, REQ_OP_DRV_IN, NULL, 0, NULL, NULL);
 	if (ret) {
-		pr_err("ufs: enter vendor mode fail 0x%x\n", ret);
+		pr_err("ufs: scsi_ss_enter_vendor_mode error 0x%x\n", ret);
 		pr_err("ufs: enter vendor mode fail, program key and try again\n");
 		ret = mi_scsi_exec(sdev, set_pwd, REQ_OP_DRV_IN, NULL, 0, NULL,
 				   NULL);
 		if (ret) {
-			pr_err("ufs: scsi_ss_enter_vendor_mode error 0x%x\n", ret);
+			pr_err("ufs: scsi_ss_set_pwd error 0x%x\n", ret);
+			pr_err("ufs: set pwd fail 0x%x\n", ret);
 			return 0;
 		}
 		ret = mi_scsi_exec(sdev, enter, REQ_OP_DRV_IN, NULL, 0, NULL,
 				   NULL);
 		if (ret) {
+			pr_err("ufs: scsi_ss_enter_vendor_mode error 0x%x\n", ret);
 			pr_err("ufs: enter vendor mode fail 0x%x\n", ret);
 			return 0;
 		}
 	}
 	ret = mi_scsi_exec(sdev, read_osv, REQ_OP_DRV_IN, data + 0x80, 0x4c,
 			   NULL, NULL);
-	if (ret)
-		pr_err("ufs: hr read buffer  error 0x%x\n", ret);
+	if (ret) {
+		pr_err("ufs: get osv result error 0x%x\n", ret);
+		pr_err("ufs: ger hr fail fail 0x%x\n", -EIO);
+	}
 	ret = mi_scsi_exec(sdev, exit, REQ_OP_DRV_IN, NULL, 0, NULL, NULL);
-	if (ret)
+	if (ret) {
+		pr_err("ufs: scsi_ss_enter_vendor_mode error 0x%x\n", ret);
 		pr_err("ufs: exit vendor mode fail 0x%x\n", ret);
+	}
 	return 0;
 }
 
@@ -809,8 +810,10 @@ static int read_vendor_hr(struct scsi_device *sdev, struct ufs_hba *hba, u8 *dat
 		u8 wd_cdb[16] = { 0x3c, 1, 1, 0x7d, 0x9c, 0x69, 0, 2 };
 		ret = mi_scsi_exec(sdev, wd_cdb, REQ_OP_DRV_IN, data,
 				   UFS_HR_SIZE, NULL, NULL);
-		if (ret)
+		if (ret) {
+			pr_err("ufs: get sdr result error 0x%x\n", ret);
 			ret = -EIO;
+		}
 		goto out;
 	}
 	if (!strncmp(sdev->vendor, "TOSHIBA", 7) ||
@@ -820,8 +823,10 @@ static int read_vendor_hr(struct scsi_device *sdev, struct ufs_hba *hba, u8 *dat
 				   UFS_HR_SIZE, NULL, NULL);
 		if (!ret && data[1] != 0xc0)
 			pr_err("ufs: hr_inruiry data error\n");
-		if (ret)
+		if (ret) {
+			pr_err("ufs: get hr_inquiry result error 0x%x\n", ret);
 			ret = -EIO;
+		}
 		goto out;
 	}
 	if (!strncmp(sdev->vendor, "SAMSUNG", 7)) {
@@ -833,30 +838,33 @@ static int read_vendor_hr(struct scsi_device *sdev, struct ufs_hba *hba, u8 *dat
 		u8 read_cdb[16] = { 0x3c, 0xc1, 0, 0, 0, 0, 0, 2 };
 		ret = mi_scsi_exec(sdev, write_cdb, REQ_OP_DRV_OUT, payload,
 				   sizeof(payload), NULL, NULL);
-		if (!ret)
+		if (ret) {
+			pr_err("ufs: hr write buffer  error 0x%x\n", ret);
+		} else {
 			ret = mi_scsi_exec(sdev, read_cdb, REQ_OP_DRV_IN, data,
 					   UFS_HR_SIZE, NULL, NULL);
+			if (ret)
+				pr_err("ufs: hr read buffer  error 0x%x\n", ret);
+		}
 		if (ret)
 			ret = -EIO;
 		goto out;
 	}
 	if (!strncmp(sdev->vendor, "SKhynix", 7)) {
-		ret = pm_runtime_resume_and_get(hba->dev);
-		if (ret < 0)
-			goto out;
+		pm_runtime_get_sync(hba->dev);
 		ret = ufshcd_read_desc_param_sel(hba, QUERY_DESC_IDN_HEALTH,
 				0, 0, 0, data, 0x25);
-		pm_runtime_put(hba->dev);
+		pm_runtime_put_sync(hba->dev);
 		if (ret)
 			goto out;
 		cdb[0] = 0xd0;
-		cdb[1] = hba->dev_info.wspecversion < 0x400 ? 3 : 0x0f;
-		cdb[2] = hba->dev_info.wspecversion < 0x400 ? 0x58 : 0x53;
-		cdb[11] = hba->dev_info.wspecversion < 0x400 ? 0x52 : 0x6e;
+		cdb[1] = hba->ufs_version < 0x400 ? 3 : 0x0f;
+		cdb[2] = hba->ufs_version < 0x400 ? 0x58 : 0x53;
+		cdb[11] = hba->ufs_version < 0x400 ? 0x52 : 0x6e;
 		ret = mi_scsi_exec(sdev, cdb, REQ_OP_DRV_IN, data + 0x80,
 				   cdb[11], NULL, NULL);
 		if (ret) {
-			pr_err("ufs: ger hr fail fail 0x%x\n", ret);
+			pr_err("ufs: get skhynix result error 0x%x\n", ret);
 			ret = 0;
 		}
 		goto out;
