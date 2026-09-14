@@ -349,7 +349,7 @@ static struct workqueue_struct *g_FenceWorkQueue;
 
 static GED_HASHTABLE_HANDLE gs_hashtable;
 
-static spinlock_t gs_hashtableLock;
+static DEFINE_SPINLOCK(gs_hashtableLock);
 
 static struct GED_KPI g_asKPI[GED_KPI_TOTAL_ITEMS];
 static int g_i32Pos;
@@ -1591,10 +1591,9 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 
 			if (psHead->i32Count < 1
 				&& (psHead->sList.next == &(psHead->sList))) {
+				spin_lock_irqsave(&gs_hashtableLock, ulIRQFlags);
 				if (psHead == main_head)
 					main_head = NULL;
-
-				spin_lock_irqsave(&gs_hashtableLock, ulIRQFlags);
 				ged_kpi_remove_head(ulID);
 				ged_hashtable_remove(gs_hashtable, (unsigned long)ulID);
 				spin_unlock_irqrestore(&gs_hashtableLock, ulIRQFlags);
@@ -2831,7 +2830,6 @@ GED_ERROR ged_kpi_system_init(void)
 		for (i = 0; i < GED_KPI_TOTAL_ITEMS; i++)
 			g_asKPI[i].ullWnd = 0x0 - 1;
 		gs_hashtable = ged_hashtable_create(10);
-		spin_lock_init(&gs_hashtableLock);
 
 		return gs_hashtable ? GED_OK : GED_ERROR_FAIL;
 	}
@@ -2847,6 +2845,8 @@ void ged_kpi_system_exit(void)
 	unsigned long ulIRQFlags;
 
 	spin_lock_irqsave(&gs_hashtableLock, ulIRQFlags);
+	main_head = NULL;
+	prev_main_head = NULL;
 	ged_hashtable_iterator_delete(gs_hashtable,
 		ged_kpi_iterator_delete_func, NULL);
 	spin_unlock_irqrestore(&gs_hashtableLock, ulIRQFlags);

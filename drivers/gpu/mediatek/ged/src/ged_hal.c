@@ -255,7 +255,7 @@ static ssize_t gpu_utilization_show(struct kobject *kobj,
 
 	mtk_get_gpu_loading(&loading);
 	mtk_get_gpu_block(&block);
-	mtk_get_gpu_idle(&idle);
+	idle = loading < 100 ? 100 - loading : 0;
 
 	return scnprintf(buf, PAGE_SIZE, "%u %u %u\n", loading, block, idle);
 }
