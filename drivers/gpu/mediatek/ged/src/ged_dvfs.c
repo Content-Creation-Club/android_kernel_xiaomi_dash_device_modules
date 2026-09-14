@@ -3836,8 +3836,17 @@ unsigned long ged_dvfs_get_gpu_commit_opp_freq(void)
 unsigned int ged_dvfs_get_gpu_loading(void)
 {
 	unsigned int loading = 0;
+	int eb_loading;
 
 	loading = (unsigned int)atomic_read(&g_gpu_loading_log);
+	if (is_fdvfs_enable()) {
+		if (g_curr_pwr_state != GED_POWER_ON)
+			return 0;
+
+		eb_loading = mtk_gpueb_sysram_read(SYSRAM_GPU_EB_USE_GPU_LOADING);
+		if (eb_loading >= 0 && eb_loading <= 100)
+			loading = eb_loading;
+	}
 
 	return loading;
 }
@@ -3861,7 +3870,7 @@ unsigned int ged_dvfs_get_gpu_blocking(void)
 
 unsigned int ged_dvfs_get_gpu_idle(void)
 {
-	return 100 - gpu_av_loading;
+	return 100 - ged_dvfs_get_gpu_loading();
 }
 
 void ged_dvfs_get_gpu_cur_freq(struct GED_DVFS_FREQ_DATA *psData)
@@ -4378,4 +4387,3 @@ module_param(g_gpu_timer_based_emu, uint, 0644);
 //MBrain
 module_param(gpu_opp_logs_enable, uint, 0644);
 #endif /* ENABLE_COMMON_DVFS */
-

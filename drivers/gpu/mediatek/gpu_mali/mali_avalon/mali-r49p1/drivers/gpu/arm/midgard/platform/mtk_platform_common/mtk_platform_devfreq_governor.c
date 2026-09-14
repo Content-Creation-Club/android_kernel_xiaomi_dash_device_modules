@@ -122,6 +122,10 @@ static int mtk_common_devfreq_get_cur_freq(struct device *dev, unsigned long *fr
 	struct kbase_device *kbdev = (struct kbase_device *)mtk_common_get_kbdev();
 
 	if (!IS_ERR_OR_NULL(kbdev)) {
+#if defined(CONFIG_MTK_GPUFREQ_V2)
+		kbdev->current_nominal_freq =
+			gpufreq_get_cur_freq(TARGET_DEFAULT) * 1000;
+#endif /* CONFIG_MTK_GPUFREQ_V2 */
 		*freq = kbdev->current_nominal_freq;
 	} else {
 		*freq = 0;

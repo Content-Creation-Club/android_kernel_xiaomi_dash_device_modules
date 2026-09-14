@@ -580,7 +580,9 @@ static ssize_t target_fps_vsync_show(struct kobject *kobj,
 	int pos = 0;
 	int length;
 
-	ged_kpi_hint_frame_info(&infoOut);
+	if (ged_kpi_hint_frame_info(&infoOut) != GED_OK)
+		return -ENODATA;
+
 	length = scnprintf(buf + pos, PAGE_SIZE - pos,
 			"main_head BQ_ID:%llu FPS_V:%d FPS_gpu:%d  (%d, %d)\n",
 			(unsigned long long)infoOut.mainHead_BQ_ID,
@@ -604,7 +606,8 @@ static ssize_t target_fps_vsync_store(struct kobject *kobj,
 		if (scnprintf(acBuffer, GED_SYSFS_MAX_BUFF_SIZE, "%s", buf)) {
 			if (kstrtoint(acBuffer, 0, &i32Value) == 0) {
 				if (i32Value & SET_MAIN_HEAD_MASK) {
-					ged_kpi_hint_frame_info(&infoOut);
+					if (ged_kpi_hint_frame_info(&infoOut) != GED_OK)
+						return -ENODATA;
 					ged_kpi_set_target_FPS_api(infoOut.mainHead_BQ_ID,
 						i32Value & 0xFF, 0);
 				} else if (i32Value > 0) {

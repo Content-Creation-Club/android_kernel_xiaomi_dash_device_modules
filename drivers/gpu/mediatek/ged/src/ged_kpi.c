@@ -3276,13 +3276,24 @@ GED_ERROR ged_kpi_hint_frame_info(
 	struct GED_BRIDGE_OUT_HINT_FRAME_INFO *out)
 {
 #ifdef MTK_GED_KPI
+	struct GED_KPI_HEAD *head;
+	unsigned long flags;
+
 	if (out == NULL)
 		return GED_ERROR_FAIL;
 
+	spin_lock_irqsave(&gs_hashtableLock, flags);
+	head = main_head;
+	if (head == NULL) {
+		spin_unlock_irqrestore(&gs_hashtableLock, flags);
+		return GED_ERROR_FAIL;
+	}
+
 	out->eError = GED_OK;
-	out->mainHead_fps_v = main_head->target_fps_v;
-	out->mainHead_fps_gpu = main_head->t_gpu_fps;
-	out->mainHead_BQ_ID = main_head->ullWnd;
+	out->mainHead_fps_v = head->target_fps_v;
+	out->mainHead_fps_gpu = head->t_gpu_fps;
+	out->mainHead_BQ_ID = head->ullWnd;
+	spin_unlock_irqrestore(&gs_hashtableLock, flags);
 	return GED_OK;
 #else
 	return GED_OK;
