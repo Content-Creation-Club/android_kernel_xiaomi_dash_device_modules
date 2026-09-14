@@ -161,6 +161,18 @@ static int current_super_resolution;
 /*P16 code for BUGP16-6610 by P-liaoxianguo at 2025/6/24 end*/
 #if WAKEUP_GESTURE
 static uint32_t gesture_id_31_invalid_cnt;
+static uint32_t gesture_fod_up_orphan_cnt;
+static unsigned long gesture_fod_up_orphan_window_start;
+static unsigned long gesture_fod_up_orphan_last;
+static bool gesture_fod_up_recovery_attempted;
+
+static void nvt_reset_fod_up_orphan_state(void)
+{
+	gesture_fod_up_orphan_cnt = 0;
+	gesture_fod_up_orphan_window_start = 0;
+	gesture_fod_up_orphan_last = 0;
+	gesture_fod_up_recovery_attempted = false;
+}
 
 const uint16_t gesture_key_array[] = {
 	KEY_POWER,  //GESTURE_WORD_C
@@ -1515,6 +1527,7 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 	if ((gesture_id == DATA_PROTOCOL) && (func_type == FUNCPAGE_GESTURE)) {
 		gesture_id = func_id;
 	} else if (gesture_id > DATA_PROTOCOL) {
+		nvt_reset_fod_up_orphan_state();
 		NVT_ERR("gesture_id %d is invalid, func_type=%d, func_id=%d\n", gesture_id, func_type, func_id);
 		if (gesture_id == 31 && func_type == 0xFF && func_id == 0xFF) {
 			gesture_id_31_invalid_cnt++;
@@ -1542,6 +1555,8 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 		return;
 	}
 	gesture_id_31_invalid_cnt = 0;
+	if (gesture_id != GESTURE_FOD)
+		nvt_reset_fod_up_orphan_state();
 
 	NVT_LOG("gesture_id = %d\n", gesture_id);
 
@@ -1627,44 +1642,87 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 			break;
 		case GESTURE_FOD:
 			if (driver_get_touch_mode_common(0, Touch_Nonui_Mode) == 2){
+				nvt_reset_fod_up_orphan_state();
 				NVT_LOG("nonui forbide fod down");
 				return;
-			} else {
+			}
 			/*P16 code for BUGP16-7026 by liuyupei at 2025/7/1 end*/
 			/*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 start*/
 			fod_status = data[4];
 			input_x = (uint16_t)((data[5] << 8) | data[6]);
 			input_y = (uint16_t)((data[7] << 8) | data[8]);
-			if (fod_status == FOD_DOWN || fod_status == FOD_UP) {
-				/*P16 code for BUGP16-2768 by liuyupei at 2025/5/16 start*/
-				NVT_LOG("get FOD event, fod_status=%d ,input_x=%d, input_y=%d\n", fod_status,input_x, input_y);
-				/*P16 code for BUGP16-2768 by liuyupei at 2025/5/16 end*/
-				// report FOD event.
-				if (ts->gesture_command & 0x04) {
-					if (!READ_ONCE(ts->display_suspend_ready)) {
-						NVT_LOG("display suspend not ready\n");
-						break;
-					}
-						if (fod_status == FOD_DOWN) {
-							if(!ts->fod_finger) {
-								NVT_LOG("Gesture : FOD Down, input_x=%d, input_y=%d.\n", input_x, input_y);
-							}
-							nvt_ts_fod_down_report(
-								input_x * SUPER_RESOLUTION_FACOTR,
-								input_y * SUPER_RESOLUTION_FACOTR);
-						} else if (fod_status == FOD_UP) {
-							if (ts->fod_finger) {
-								NVT_LOG("Gesture : FOD Up, fod_id:%d\n", TOUCH_FOD_ID);
-								nvt_ts_fod_up_report();
-							}
-						}
-				} else {
-					NVT_LOG("Gesture : FOD Not Enable.\n");
-				}
+			if (fod_status != FOD_DOWN && fod_status != FOD_UP) {
+				nvt_reset_fod_up_orphan_state();
+				break;
 			}
+			/*P16 code for BUGP16-2768 by liuyupei at 2025/5/16 start*/
+			NVT_LOG("get FOD event, fod_status=%d ,input_x=%d, input_y=%d\n", fod_status,input_x, input_y);
+			/*P16 code for BUGP16-2768 by liuyupei at 2025/5/16 end*/
+			if (!(ts->gesture_command & 0x04)) {
+				nvt_reset_fod_up_orphan_state();
+				NVT_LOG("Gesture : FOD Not Enable.\n");
+				break;
+			}
+			if (!READ_ONCE(ts->display_suspend_ready)) {
+				nvt_reset_fod_up_orphan_state();
+				NVT_LOG("display suspend not ready\n");
+				break;
+			}
+			if (fod_status == FOD_DOWN) {
+				nvt_reset_fod_up_orphan_state();
+				if(!ts->fod_finger)
+					NVT_LOG("Gesture : FOD Down, input_x=%d, input_y=%d.\n", input_x, input_y);
+				nvt_ts_fod_down_report(
+					input_x * SUPER_RESOLUTION_FACOTR,
+					input_y * SUPER_RESOLUTION_FACOTR);
+				break;
+			}
+			if (ts->fod_finger) {
+				nvt_reset_fod_up_orphan_state();
+				NVT_LOG("Gesture : FOD Up, fod_id:%d\n", TOUCH_FOD_ID);
+				nvt_ts_fod_up_report();
+				break;
+			}
+			if (gesture_fod_up_recovery_attempted) {
+				if (!time_after(jiffies,
+						gesture_fod_up_orphan_last + HZ)) {
+					gesture_fod_up_orphan_last = jiffies;
+					break;
+				}
+				nvt_reset_fod_up_orphan_state();
+			}
+			if (!gesture_fod_up_orphan_cnt ||
+			    time_after(jiffies, gesture_fod_up_orphan_last + HZ) ||
+			    time_after(jiffies,
+				       gesture_fod_up_orphan_window_start + HZ)) {
+				gesture_fod_up_orphan_cnt = 0;
+				gesture_fod_up_orphan_window_start = jiffies;
+			}
+			gesture_fod_up_orphan_last = jiffies;
+			if (++gesture_fod_up_orphan_cnt < 10)
+				break;
+			if (ts->nvt_tool_in_use) {
+				gesture_fod_up_orphan_cnt = 0;
+				gesture_fod_up_orphan_window_start = jiffies;
+				NVT_ERR("NVT tool in use, skip gesture recovery.\n");
+				break;
+			}
+			gesture_fod_up_recovery_attempted = true;
+			NVT_ERR("recover from orphan FOD UP gesture storm\n");
+			gesture_status_addr = ts->mmap->EVENT_BUF_ADDR + 0x5C;
+			nvt_set_page(gesture_status_addr);
+			gesture_status[0] = gesture_status_addr & 0x7F;
+			CTP_SPI_READ(ts->client, gesture_status,
+					sizeof(gesture_status));
+			NVT_ERR("gesture status 0x%X: %02X %02X %02X %02X\n",
+					gesture_status_addr, gesture_status[1],
+					gesture_status[2], gesture_status[3],
+					gesture_status[4]);
+			nvt_read_fw_history_all();
+			nvt_set_gesture_switch(
+					(uint8_t)(ts->gesture_command & 0xFF));
 			/*P16 code for HQFEAT-94432 by liaoxianguo at 2025/3/27 end*/
 			break;
-			}
 		default:
 			break;
 	}
@@ -2475,11 +2533,18 @@ static int nvt_report_thp_frame(void)
 	ts->thp_frame_buf[0] = 0;
 	ret = CTP_SPI_READ(ts->client, ts->thp_frame_buf,
 			   data_len + NVT_THP_HEADER_LEN);
-	if (ret < 0)
+	if (ret < 0) {
+#if WAKEUP_GESTURE
+		nvt_reset_fod_up_orphan_state();
+#endif
 		return ret;
+	}
 
 #if NVT_TOUCH_WDT_RECOVERY
 	if (nvt_wdt_fw_recovery(ts->thp_frame_buf)) {
+#if WAKEUP_GESTURE
+		nvt_reset_fod_up_orphan_state();
+#endif
 		NVT_ERR("Recover for fw reset, %02X\n", ts->thp_frame_buf[1]);
 		if (ts->thp_frame_buf[1] == 0xFE) {
 			nvt_sw_reset_idle();
@@ -2499,8 +2564,11 @@ static int nvt_report_thp_frame(void)
 						POINT_DATA_CHECKSUM_LEN))
 			nvt_ts_wakeup_gesture_report(
 				ts->thp_frame_buf[1] >> 3, ts->thp_frame_buf);
+		else
+			nvt_reset_fod_up_orphan_state();
 		return 0;
 	}
+	nvt_reset_fod_up_orphan_state();
 #endif
 
 	if (!nvt_thp_frame_is_valid(ts->thp_frame_buf))
@@ -2590,6 +2658,9 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 	if (ts->dev_pm_suspend) {
 		ret = wait_for_completion_timeout(&ts->dev_pm_resume_completion, msecs_to_jiffies(500));
 		if (!ret) {
+#if WAKEUP_GESTURE
+			nvt_reset_fod_up_orphan_state();
+#endif
 			NVT_ERR("system(bus) can't finished resuming procedure, skip it!\n");
 			goto XFER_ERROR;
 		}
@@ -4909,6 +4980,7 @@ static int32_t nvt_ts_suspend(struct device *dev)
 /*P16 code for BUGP16-2768 by xiongdejun at 2025/5/26 end*/
 #if WAKEUP_GESTURE
 	gesture_id_31_invalid_cnt = 0;
+	nvt_reset_fod_up_orphan_state();
 #endif
 	bTouchIsAwake = 0;
 
