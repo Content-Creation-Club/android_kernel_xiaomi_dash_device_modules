@@ -97,7 +97,7 @@ static long perf_actuator_ioctl(struct file *file, unsigned int cmd,
 	down_read(&table_rwsem);
 	entry = &perf_actuator_table[index];
 	if (entry->callback && entry->cmd == cmd) {
-		ret = entry->callback(arg);
+		ret = entry->callback((void *)arg);
 	} else {
 		pr_err("perf_actuator: idx %d, cmd %d not match or not registered!\n",
 		       (int)index, (int)cmd);

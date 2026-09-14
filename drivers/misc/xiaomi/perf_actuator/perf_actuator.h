@@ -4,11 +4,11 @@
 #define _XIAOMI_PERF_ACTUATOR_H_
 
 /*
- * Intentional source-only stock difference: the callback calling convention is
- * recovered, but Xiaomi's typedef spelling is unavailable. This name changes
- * the CONFIG_MODVERSIONS CRC and therefore cannot serve stock xr-qi.ko.
+ * Stock provider and xr-qi KCFI IDs identify this as int (void *).
+ * Xiaomi's typedef spelling remains unavailable, so CONFIG_MODVERSIONS stock
+ * compatibility must still be checked separately.
  */
-typedef int (*perf_actuator_callback_t)(unsigned long arg);
+typedef int (*perf_actuator_callback_t)(void *arg);
 
 int register_perf_actuator(unsigned int cmd,
 			   perf_actuator_callback_t callback);
