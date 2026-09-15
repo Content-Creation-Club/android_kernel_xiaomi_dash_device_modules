@@ -165,6 +165,11 @@ static uint32_t gesture_fod_up_orphan_cnt;
 static unsigned long gesture_fod_up_orphan_window_start;
 static unsigned long gesture_fod_up_orphan_last;
 static bool gesture_fod_up_recovery_attempted;
+static uint32_t gesture_dt2w_replay_cnt;
+static unsigned long gesture_dt2w_replay_window_start;
+static unsigned long gesture_dt2w_replay_last;
+static bool gesture_dt2w_recovery_attempted;
+static bool gesture_dt2w_reported;
 
 static void nvt_reset_fod_up_orphan_state(void)
 {
@@ -172,6 +177,15 @@ static void nvt_reset_fod_up_orphan_state(void)
 	gesture_fod_up_orphan_window_start = 0;
 	gesture_fod_up_orphan_last = 0;
 	gesture_fod_up_recovery_attempted = false;
+}
+
+static void nvt_reset_dt2w_replay_state(void)
+{
+	gesture_dt2w_replay_cnt = 0;
+	gesture_dt2w_replay_window_start = 0;
+	gesture_dt2w_replay_last = 0;
+	gesture_dt2w_recovery_attempted = false;
+	gesture_dt2w_reported = false;
 }
 
 const uint16_t gesture_key_array[] = {
@@ -1503,6 +1517,7 @@ static void nvt_flash_proc_deinit(void)
 
 #define FOD_DOWN 1
 #define FOD_UP 2
+#define DT2W_REPLAY_MAX_GAP_MS 100
 
 /*******************************************************
 Description:
@@ -1528,6 +1543,7 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 		gesture_id = func_id;
 	} else if (gesture_id > DATA_PROTOCOL) {
 		nvt_reset_fod_up_orphan_state();
+		nvt_reset_dt2w_replay_state();
 		NVT_ERR("gesture_id %d is invalid, func_type=%d, func_id=%d\n", gesture_id, func_type, func_id);
 		if (gesture_id == 31 && func_type == 0xFF && func_id == 0xFF) {
 			gesture_id_31_invalid_cnt++;
@@ -1557,6 +1573,8 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 	gesture_id_31_invalid_cnt = 0;
 	if (gesture_id != GESTURE_FOD)
 		nvt_reset_fod_up_orphan_state();
+	if (gesture_id != GESTURE_DOUBLE_CLICK)
+		nvt_reset_dt2w_replay_state();
 
 	NVT_LOG("gesture_id = %d\n", gesture_id);
 
@@ -1578,13 +1596,67 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 			if (ts->gesture_command & 0x01) {
 				/*P16 code for BUGP16-7026 by liuyupei at 2025/7/1 start*/
 				if (driver_get_touch_mode_common(0, Touch_Nonui_Mode) > 0){
+					nvt_reset_dt2w_replay_state();
 					NVT_LOG("nonui forbide double click");
 					return;
 				}
 					NVT_LOG("Gesture : Double Click.\n");
 					keycode = gesture_key_array[3];
+					if (!READ_ONCE(ts->display_suspend_ready)) {
+						nvt_reset_dt2w_replay_state();
+						break;
+					}
+					if (gesture_dt2w_recovery_attempted) {
+						if (!time_after(jiffies,
+								gesture_dt2w_replay_last +
+								msecs_to_jiffies(DT2W_REPLAY_MAX_GAP_MS))) {
+							gesture_dt2w_replay_last = jiffies;
+							keycode = 0;
+							break;
+						}
+						nvt_reset_dt2w_replay_state();
+					}
+					if (!gesture_dt2w_replay_window_start ||
+					    time_after(jiffies,
+						       gesture_dt2w_replay_last +
+						       msecs_to_jiffies(DT2W_REPLAY_MAX_GAP_MS)) ||
+					    time_after(jiffies,
+						       gesture_dt2w_replay_window_start + HZ)) {
+						gesture_dt2w_replay_cnt = 0;
+						gesture_dt2w_replay_window_start = jiffies;
+						gesture_dt2w_reported = false;
+					}
+					gesture_dt2w_replay_last = jiffies;
+					if (gesture_dt2w_reported)
+						keycode = 0;
+					else
+						gesture_dt2w_reported = true;
+					if (++gesture_dt2w_replay_cnt < 10)
+						break;
+					if (ts->nvt_tool_in_use) {
+						gesture_dt2w_replay_cnt = 0;
+						gesture_dt2w_replay_window_start = jiffies;
+						NVT_ERR("NVT tool in use, skip gesture recovery.\n");
+						break;
+					}
+					gesture_dt2w_recovery_attempted = true;
+					NVT_ERR("recover from DT2W gesture replay storm\n");
+					gesture_status_addr = ts->mmap->EVENT_BUF_ADDR + 0x5C;
+					nvt_set_page(gesture_status_addr);
+					gesture_status[0] = gesture_status_addr & 0x7F;
+					CTP_SPI_READ(ts->client, gesture_status,
+							sizeof(gesture_status));
+					NVT_ERR("gesture status 0x%X: %02X %02X %02X %02X\n",
+							gesture_status_addr, gesture_status[1],
+							gesture_status[2], gesture_status[3],
+							gesture_status[4]);
+					nvt_read_fw_history_all();
+					nvt_set_gesture_switch(
+							(uint8_t)(ts->gesture_command & 0xFF));
+					gesture_dt2w_replay_last = jiffies;
 				/*P16 code for BUGP16-7026 by liuyupei at 2025/7/1 end*/
 			} else {
+				nvt_reset_dt2w_replay_state();
 				NVT_LOG("Gesture : Double Click Not Enable.\n");
 				keycode = 0;
 			}
@@ -2536,6 +2608,7 @@ static int nvt_report_thp_frame(void)
 	if (ret < 0) {
 #if WAKEUP_GESTURE
 		nvt_reset_fod_up_orphan_state();
+		nvt_reset_dt2w_replay_state();
 #endif
 		return ret;
 	}
@@ -2544,6 +2617,7 @@ static int nvt_report_thp_frame(void)
 	if (nvt_wdt_fw_recovery(ts->thp_frame_buf)) {
 #if WAKEUP_GESTURE
 		nvt_reset_fod_up_orphan_state();
+		nvt_reset_dt2w_replay_state();
 #endif
 		NVT_ERR("Recover for fw reset, %02X\n", ts->thp_frame_buf[1]);
 		if (ts->thp_frame_buf[1] == 0xFE) {
@@ -2561,14 +2635,17 @@ static int nvt_report_thp_frame(void)
 #if WAKEUP_GESTURE
 	if (!bTouchIsAwake) {
 		if (!nvt_ts_point_data_checksum(ts->thp_frame_buf,
-						POINT_DATA_CHECKSUM_LEN))
+						POINT_DATA_CHECKSUM_LEN)) {
 			nvt_ts_wakeup_gesture_report(
 				ts->thp_frame_buf[1] >> 3, ts->thp_frame_buf);
-		else
+		} else {
 			nvt_reset_fod_up_orphan_state();
+			nvt_reset_dt2w_replay_state();
+		}
 		return 0;
 	}
 	nvt_reset_fod_up_orphan_state();
+	nvt_reset_dt2w_replay_state();
 #endif
 
 	if (!nvt_thp_frame_is_valid(ts->thp_frame_buf))
@@ -2660,6 +2737,7 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 		if (!ret) {
 #if WAKEUP_GESTURE
 			nvt_reset_fod_up_orphan_state();
+			nvt_reset_dt2w_replay_state();
 #endif
 			NVT_ERR("system(bus) can't finished resuming procedure, skip it!\n");
 			goto XFER_ERROR;
@@ -4981,6 +5059,7 @@ static int32_t nvt_ts_suspend(struct device *dev)
 #if WAKEUP_GESTURE
 	gesture_id_31_invalid_cnt = 0;
 	nvt_reset_fod_up_orphan_state();
+	nvt_reset_dt2w_replay_state();
 #endif
 	bTouchIsAwake = 0;
 
