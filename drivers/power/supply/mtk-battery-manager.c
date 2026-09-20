@@ -1014,6 +1014,8 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
 	POWER_SUPPLY_PROP_MODEL_NAME,
@@ -1101,6 +1103,8 @@ static int battery_is_writeable(struct power_supply *psy, enum power_supply_prop
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT:
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
 		rc = 1;
 		break;
@@ -1263,6 +1267,19 @@ static int bs_psy_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT:
 		val->intval = gm->thermal_level;
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
+		if (gm->smart_chg[SMART_CHG_NAVIGATION].en_ret)
+			val->intval = max(gm->smart_chg[SMART_CHG_NAVIGATION].func_val -
+				SMART_CHG_SOCLMT_CANCEL_HYS_DEFAULT, 0);
+		else
+			val->intval = 0;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
+		if (gm->smart_chg[SMART_CHG_NAVIGATION].en_ret)
+			val->intval = gm->smart_chg[SMART_CHG_NAVIGATION].func_val;
+		else
+			val->intval = 100;
+		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
 		if (IS_ERR_OR_NULL(bs_data->chg_psy)) {
 			bs_data->chg_psy = devm_power_supply_get_by_phandle(
@@ -1313,6 +1330,25 @@ static int bs_psy_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT:
 		gm->thermal_level = val->intval;
 		pr_err("set battery thermal level = %d\n", gm->thermal_level);
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
+		if (val->intval == 0 &&
+		    !gm->smart_chg[SMART_CHG_NAVIGATION].en_ret)
+			break;
+		if (!gm->smart_chg[SMART_CHG_NAVIGATION].en_ret ||
+		    val->intval != gm->smart_chg[SMART_CHG_NAVIGATION].func_val -
+				SMART_CHG_SOCLMT_CANCEL_HYS_DEFAULT)
+			ret = -EINVAL;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
+		if (val->intval < SMART_CHG_SOCLMT_CANCEL_HYS_DEFAULT ||
+		    val->intval > 100) {
+			ret = -EINVAL;
+			break;
+		}
+		battery_set_property(gm, BAT_PROP_SMART_CHG,
+			(val->intval << 16) | BIT(SMART_CHG_NAVIGATION) |
+			(val->intval < 100));
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
 		charger_manager_set_sic_current(val->intval / 1000);
