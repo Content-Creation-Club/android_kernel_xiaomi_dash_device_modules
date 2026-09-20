@@ -2946,12 +2946,16 @@ static void smart_chg_handle_soc_limit(struct mtk_charger *info)
 	{
 		info->smart_soclmt_trig = true;
 		charger_dev_enable(info->chg1_dev, false);
+		if (info->battery_psy)
+			power_supply_changed(info->battery_psy);
 		mca_log_err("smart_chg soclimit triggger, stop charging\n");
 	}
 	else if(!info->smart_chg[SMART_CHG_ENDURANCE_PRO].active_status && !info->smart_chg[SMART_CHG_NAVIGATION].active_status && !info->night_charge_enable && info->smart_soclmt_trig)
 	{
 		info->smart_soclmt_trig = false;
 		charger_dev_enable(info->chg1_dev, true);
+		if (info->battery_psy)
+			power_supply_changed(info->battery_psy);
 		mca_log_err("smart_chg soclimit cancel, restart charging\n");
 	}
 

@@ -1146,7 +1146,8 @@ static int bs_psy_get_property(struct power_supply *psy,
 	/* to avoid i2c suspend but query by other module */
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		val->intval = bs_data->bat_status;
+		val->intval = smart_soclmt_get_flag() ?
+			POWER_SUPPLY_STATUS_NOT_CHARGING : bs_data->bat_status;
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		power_supply_get_property(gm->ti_bms_psy, POWER_SUPPLY_PROP_TEMP, val);
