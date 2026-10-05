@@ -220,7 +220,7 @@ static unsigned int sla_ipv4_in(void *priv, struct sk_buff *skb,
 {
 	struct sla_interface *iface;
 	struct sla_ring *ring;
-	struct sla_packet *current, *previous;
+	struct sla_packet *record, *previous;
 	struct sla_pending_packet *pending;
 	unsigned long stats_flags, pkt_flags;
 	u32 index, previous_index, length;
@@ -236,18 +236,18 @@ static unsigned int sla_ipv4_in(void *priv, struct sk_buff *skb,
 	index = ring->index;
 	if (index >= SLA_RING_DECLARED_COUNT)
 		sla_stock_bounds_trap();
-	current = &ring->packets[index];
-	current->direction = 2;
-	current->timestamp_ms = sla_timestamp_ms();
-	current->length = skb->len + ETH_HLEN;
-	current->local_port = ntohs(tcp_hdr(skb)->dest);
+	record = &ring->packets[index];
+	record->direction = 2;
+	record->timestamp_ms = sla_timestamp_ms();
+	record->length = skb->len + ETH_HLEN;
+	record->local_port = ntohs(tcp_hdr(skb)->dest);
 	spin_lock_irqsave(&pkt_spin_lock, pkt_flags);
-	pending = pkt_find(current->local_port);
+	pending = pkt_find(record->local_port);
 	if (pending) {
 		pkt_delete(pending);
-		current->request = 1;
+		record->request = 1;
 	} else {
-		current->request = 0;
+		record->request = 0;
 		index = ring->index;
 		if (index >= SLA_RING_DECLARED_COUNT)
 			sla_stock_bounds_trap();
@@ -263,7 +263,7 @@ static unsigned int sla_ipv4_in(void *priv, struct sk_buff *skb,
 			if (length <= config_data.max_size) {
 				previous->length = length;
 				spin_unlock_irqrestore(&pkt_spin_lock, pkt_flags);
-				memset(current, 0, sizeof(*current));
+				memset(record, 0, sizeof(*record));
 				goto unlock_stats;
 			}
 		}
@@ -280,7 +280,7 @@ static unsigned int sla_ipv4_out(void *priv, struct sk_buff *skb,
 {
 	struct sla_interface *iface;
 	struct sla_ring *ring;
-	struct sla_packet *current;
+	struct sla_packet *record;
 	struct sla_pending_packet *pending;
 	struct iphdr *ip;
 	unsigned long flags;
@@ -323,13 +323,13 @@ static unsigned int sla_ipv4_out(void *priv, struct sk_buff *skb,
 	index = ring->index;
 	if (index >= SLA_RING_DECLARED_COUNT)
 		sla_stock_bounds_trap();
-	current = &ring->packets[index];
-	current->direction = 1;
-	current->timestamp_ms = timestamp;
-	current->length = skb->len + ETH_HLEN;
-	current->request = 1;
+	record = &ring->packets[index];
+	record->direction = 1;
+	record->timestamp_ms = timestamp;
+	record->length = skb->len + ETH_HLEN;
+	record->request = 1;
 	ring->index = index + 1 < ring->count ? index + 1 : 0;
-	current->local_port = ntohs(tcp_hdr(skb)->source);
+	record->local_port = ntohs(tcp_hdr(skb)->source);
 unlock:
 	spin_unlock_irqrestore(&stats_spin_lock, flags);
 	return NF_ACCEPT;
