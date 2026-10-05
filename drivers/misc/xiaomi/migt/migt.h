@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Unintegrated stock source fragments; see RECONSTRUCTION.txt. */
+/* Stock source reconstruction; native build/provider integration untested. */
 #ifndef XIAOMI_MIGT_H
 #define XIAOMI_MIGT_H
 #include <linux/cpufreq.h>
@@ -29,9 +29,10 @@ extern int migt_thresh, migt_viptask_thresh, fps_variance_ratio;
 extern int fps_mexec_update_policy, sys_migt_count;
 extern u64 migt_last_update_time;
 extern bool migt_boost_flag, vtask_boost_flag;
-/* These real work/timer objects require the omitted stock startup path. */
+/* Real owners live in owners.c; module-lifecycle.c retains stock init order. */
 extern struct work_struct irq_boost_work;
 extern struct hrtimer vtask_timer;
+extern spinlock_t migt_lock;
 
 extern u8 frame_load_has_init, game_load_has_init;
 extern int flw_enable, flw_freq_enable, flw_debug;
@@ -107,7 +108,7 @@ bool is_frender_sibling(struct task_struct *task);
 extern u8 rinfo_back[0x80];
 /* Native locks replace stock's embedded sequence@0 / raw lock@4 layout.
  * Recovered migt_sched_init initializes the locks; migt_hardwork writes
- * rinfo_back snapshots. Whole-module invocation/storage remains absent. */
+ * rinfo_back snapshots. owners.c supplies real local storage. */
 struct migt_render_info {
 	seqlock_t lock;
 	u8 valid;
@@ -147,7 +148,9 @@ unsigned long frame_load_enable(void);
 unsigned long is_rcal_task(struct task_struct *task, int caller_flag);
 void migt_hook(struct task_struct *task, int cpu, int event, u64 wallclock, u64 delta_exec);
 void game_load_update(struct task_struct *task, u64 runtime, unsigned int cpu);
-void game_load_history_update(void);
+/* Original CFI3e7ff605 proves void(u64), including its unused formal. */
+void game_load_history_update(u64 unused_generation);
+void update_freq_limit(u64 unused_value);
 void game_load_reset(void);
 void frame_load_reset(void);
 void set_flw_flag(struct task_struct *task, u32 set_bit, u32 clear_bit);
@@ -175,7 +178,7 @@ extern int vip_task_schedboost, ceiling_from_user;
 extern u8 migt_enabled, ceiling_freq_limit_work;
 extern u32 ceiling_users[10];
 extern int ceiling_users_count;
-/* Real workqueue/delayed-work and CPU-visit lifecycle owners are incomplete. */
+/* Native workqueue/delayed-work owners retain the stock lifetime defects. */
 extern struct workqueue_struct *migt_wq;
 extern struct delayed_work migt_rem;
 extern u64 cpus_visit;
@@ -189,6 +192,7 @@ void do_ceiling_rem(struct work_struct *work);
 unsigned int update_policy_online(unsigned int force);
 struct notifier_block;
 int migt_freq_qos_init(struct notifier_block *nb, unsigned long event, void *data);
+extern struct notifier_block init_freq_qos_notifier;
 void finish_freq_qos_workfn(struct work_struct *work);
 bool glk_enable(void);
 void glk_force_maxfreq_break(u8 value);
@@ -200,7 +204,6 @@ void set_next_freq(void *data, unsigned long util, unsigned long mapped_freq,
 		unsigned long max, unsigned long *freq, struct cpufreq_policy *policy,
 		bool *need_update);
 
-/* Observed slot ABI, not an integer enable variable. No assignment is made
- * by these fragments because startup/teardown are incomplete. */
+/* Imported slot ABI: module-lifecycle.c assigns/clears the actual provider. */
 extern int (*migt_sched_enable)(void);
 #endif

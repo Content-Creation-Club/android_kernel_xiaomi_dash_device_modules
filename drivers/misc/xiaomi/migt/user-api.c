@@ -97,7 +97,7 @@ frame_detected:
 			break;
 		case 3:
 			/* Stock passes the generation in w0; the existing body ignores it. */
-			game_load_history_update();
+			game_load_history_update((u32)sys_migt_count);
 			if (ceiling_enable == 1)
 				queue_delayed_work_on(WORK_CPU_UNBOUND, migt_wq, &ceiling_work, 1);
 			threshold = (u32)migt_thresh + ((u32)migt_thresh >> 1);

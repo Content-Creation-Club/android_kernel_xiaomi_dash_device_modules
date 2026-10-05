@@ -27,7 +27,7 @@ static u64 drain_counter(u64 *counter, u64 *previous)
 }
 
 /* .text+0x64c4..0x68c0. Stock drains without taking the runtime writer's lock. */
-void game_load_history_update(void)
+void game_load_history_update(u64 unused_generation)
 {
 	u64 now = fas_sched_clock(), selected, totals[7];
 	struct migt_game_history *record;

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Source-only userspace contracts; no device or module registration. */
+/* Source-only userspace contracts; native build/runtime untested. */
 #ifndef XIAOMI_MIGT_USER_API_H
 #define XIAOMI_MIGT_USER_API_H
 #include <linux/fs.h>
@@ -8,7 +8,7 @@
 #include <linux/sysctl.h>
 #include "migt.h"
 
-/* Recovered references owned by the omitted real worker/startup/controller. */
+/* Genuine local state supplied by owners.c and stock lifecycle algorithms. */
 extern u32 first_lunch_fps, itask_detect_interval;
 extern int render_pid, render_update, high_resolution_enable;
 extern u32 over_thresh_count, last_ui_traced_uid;
@@ -20,7 +20,8 @@ extern struct delayed_work ceiling_rem, ceiling_work, migt_work;
 extern struct hrtimer migt_frame_timer;
 /* Real imported mi_schedule state; no local definition replaces the provider. */
 extern u32 show_traced_uid;
-extern int force_reset_runtime;
+/* Stock MIGT .bss+0x24, __param ops_uint: this is a local owner. */
+extern u32 force_reset_runtime;
 
 long migt_ioctl(struct file *file, unsigned int command, unsigned long argument);
 int migt_open(struct inode *inode, struct file *file);

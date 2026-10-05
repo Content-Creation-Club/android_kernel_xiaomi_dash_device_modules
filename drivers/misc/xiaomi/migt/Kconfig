@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
+config XIAOMI_MIGT
+	tristate "Xiaomi MiGameTurbo stock reconstruction"
+	depends on ARM64 && ANDROID_VENDOR_HOOKS && ANDROID_VENDOR_OEM_DATA
+	default n
+	help
+	  Source reconstruction of the dash stock MIGT scheduling and frequency
+	  module. Stock defects are retained; see RECONSTRUCTION.txt. Real metis
+	  and scheduler/FPSGO/sugov providers must be restored before integration.
+	  Compilation, native ABI and runtime remain untested.

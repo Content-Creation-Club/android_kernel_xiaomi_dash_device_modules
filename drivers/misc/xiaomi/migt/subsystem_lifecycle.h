@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Recovered helper contracts; module entry/state definitions remain absent. */
+/* Recovered helper contracts; native provider integration remains untested. */
 #ifndef XIAOMI_MIGT_SUBSYSTEM_LIFECYCLE_H
 #define XIAOMI_MIGT_SUBSYSTEM_LIFECYCLE_H
 #include <linux/irq_work.h>

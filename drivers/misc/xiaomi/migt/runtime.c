@@ -11,7 +11,7 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 extern u64 fas_sched_clock(void);
 extern u64 scale_exec_time(u64 runtime, struct rq *rq);
 
-static DEFINE_SPINLOCK(migt_lock);
+DEFINE_SPINLOCK(migt_lock);
 static int old_migt_thresh;
 static u64 migt_fast_div, migt_monitor_thresh;
 DEFINE_PER_CPU(struct migt_game_cpu, migt_game_load_info);

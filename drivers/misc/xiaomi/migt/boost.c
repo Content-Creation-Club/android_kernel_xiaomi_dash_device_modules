@@ -188,9 +188,9 @@ void do_ceiling_rem(struct work_struct *work)
 	ceiling_freq_limit_work = 0;
 }
 
-/* Stock .data+0x50 notifier and .data+0xb8 preinitialized work. They are
- * locally described but never registered or queued by a missing startup. */
-static struct notifier_block init_freq_qos_notifier = {
+/* Stock .data+0x50 notifier is shared with the recovered module initializer;
+ * .data+0xb8 preinitialized work remains local to its real callback. */
+struct notifier_block init_freq_qos_notifier = {
 	.notifier_call = migt_freq_qos_init,
 };
 static DECLARE_WORK(finish_freq_qos_work, finish_freq_qos_workfn);
