@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config XIAOMI_XM_POWER
+	tristate "Xiaomi power detector"
+	depends on ARM64 && PM_SLEEP
+	depends on !VIRT_CPU_ACCOUNTING_NATIVE && !VIRT_CPU_ACCOUNTING_GEN
+	help
+	  Reconstruct the dash stock periodic wakeup-source and top-five thread
+	  CPU-usage logger, including its /sys/xm_power controls. This preserves
+	  the stock resource lifetime and parameter handling; see the reverse
+	  engineering report before enabling or unloading it.

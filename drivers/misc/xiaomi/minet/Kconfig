@@ -1,0 +1,8 @@
+config MINET
+	tristate "Xiaomi minet flow monitor and idle notifications"
+	depends on NETFILTER && NF_CONNTRACK && INET && IPV6
+	depends on PM_SLEEP && ANDROID_VENDOR_OEM_DATA
+	help
+	  Reconstructs the OS3.0.305 minet Generic Netlink, flow accounting and
+	  wlan0 idle notification contracts. Stock defects are deliberately
+	  retained; see STOCK_CONTRACT.md before changing behavior.

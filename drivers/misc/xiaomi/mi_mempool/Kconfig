@@ -1,0 +1,7 @@
+config XIAOMI_MI_MEMPOOL
+	tristate "Xiaomi reserved page pool"
+	depends on ARM64 && ARM64_MTE && ANDROID_VENDOR_HOOKS
+	depends on ANDROID_VENDOR_OEM_DATA && SYSFS && SMP && SWAP && !NUMA
+	help
+	  Reconstruct the dash OS3.0.305 reserved page allocator and its sysfs
+	  policy. Stock error paths and known lifetime defects are retained.

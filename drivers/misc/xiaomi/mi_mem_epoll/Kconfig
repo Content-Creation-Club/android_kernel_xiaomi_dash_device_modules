@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config XIAOMI_MI_MEM_EPOLL
+	tristate "Xiaomi global memory reclaim and epoll interface"
+	depends on ARM64 && MEMCG && PROC_FS && SYSFS
+	depends on ANDROID_VENDOR_HOOKS && ANDROID_VENDOR_OEM_DATA
+	help
+	  Reconstruct the Redmi Turbo 5 Max stock global reclaim controls and
+	  Android reclaim hooks, including the stock lowmemorykiller proc ABI.

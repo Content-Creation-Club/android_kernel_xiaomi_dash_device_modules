@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config XIAOMI_SLA
+	tristate "Xiaomi SLA packet statistics collector"
+	depends on ARM64 && ARM64_4K_PAGES && INET && NETFILTER && PROC_FS
+	help
+	  Provide the stock /proc/sla configuration, per-interface TCP
+	  packet rings and counters, and UDP VoIP destination capture.
