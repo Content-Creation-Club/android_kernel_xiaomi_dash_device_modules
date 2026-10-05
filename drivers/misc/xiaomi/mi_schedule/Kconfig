@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0
+config XIAOMI_MI_SCHEDULE
+	tristate "Xiaomi package runtime accounting"
+	depends on ARM64 && ANDROID_VENDOR_HOOKS && ANDROID_VENDOR_OEM_DATA
+	help
+	  Reconstruct the dash stock mi_schedule task/UID runtime provider and
+	  /proc/package interfaces. Stock failure and lifetime defects are
+	  retained; see RECONSTRUCTION.txt. Build and runtime remain untested.

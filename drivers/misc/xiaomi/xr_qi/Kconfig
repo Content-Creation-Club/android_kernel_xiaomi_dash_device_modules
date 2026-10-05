@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
+config XIAOMI_XR_QI
+	tristate "Xiaomi QoS inheritance provider"
+	depends on ARM64 && ANDROID_VENDOR_HOOKS && ANDROID_VENDOR_OEM_DATA
+	depends on XIAOMI_PERF_ACTUATOR && ANDROID_BINDER_IPC && CGROUPS && SMP && FUTEX
+	depends on !PREEMPT_RT && !DEBUG_SPINLOCK && !DEBUG_LOCK_ALLOC
+	depends on MUTEX_SPIN_ON_OWNER && RWSEM_SPIN_ON_OWNER
+	help
+	  Source reconstruction of dash stock xr-qi. See RECONSTRUCTION.txt
+	  for retained stock defects, coverage gaps and untested status.

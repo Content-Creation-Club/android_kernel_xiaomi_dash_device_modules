@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config XIAOMI_LB
+	tristate "Xiaomi launch boost page recorder"
+	depends on ARM64 && ARM64_4K_PAGES && MMU && SWAP && PROC_FS && ANDROID_VENDOR_HOOKS
+	help
+	  Stock dash launch boost interface, file-page collection and process
+	  PTE snapshot/preread. Reconstructed from OS3.0.305 lb.ko; see
+	  RECONSTRUCTION.txt for retained defects and untested status.

@@ -1,0 +1,8 @@
+config XIAOMI_IO_MONITOR
+	tristate "Xiaomi stock IO monitor reconstruction"
+	depends on ARM64
+	depends on BLOCK && F2FS_FS && SCSI_UFSHCD && ANDROID_VENDOR_HOOKS
+	depends on TASK_IO_ACCOUNTING && TASK_XACCT && PROC_FS
+	help
+	  Source reconstruction of the dash OS3.0.305 io_monitor module.
+	  Preserves observed stock defects; build and runtime are untested.

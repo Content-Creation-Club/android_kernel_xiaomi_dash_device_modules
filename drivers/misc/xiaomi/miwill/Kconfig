@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config XIAOMI_MIWiLL
+	tristate "Xiaomi MiWiLL virtual network device"
+	depends on NET && INET && IPV6 && NETFILTER
+	default n
+	help
+	  Stock virtual network device and its embedded application flow monitor.
+	  Source recovery only; compilation, CFI and runtime remain untested.
+
+config XIAOMI_MIWiLL_REDUDANCY
+	tristate "Xiaomi MiWiLL redudancy mode"
+	depends on NET && INET
+	default n
+	help
+	  Independent stock mode module with its own private framework registry.

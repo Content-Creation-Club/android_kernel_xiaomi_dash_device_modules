@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config XIAOMI_XR_QS
+	tristate "Xiaomi QoS scheduling and speedlock reconstruction"
+	depends on ANDROID_VENDOR_HOOKS && XIAOMI_XR_QI && XIAOMI_MI_SCHEDULE
+	help
+	  Source reconstruction of dash stock xr-qs. Retains observed stock
+	  behavior and defects. Build and runtime compatibility are untested.
