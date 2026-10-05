@@ -5,6 +5,9 @@
 #include <linux/cpufreq.h>
 #include <linux/cpumask.h>
 #include <linux/hrtimer.h>
+#include <linux/pm_qos.h>
+#include <linux/sched.h>
+#include <linux/seqlock.h>
 #include <linux/workqueue.h>
 #include "../mi_schedule/mi_schedule.h"
 
@@ -101,6 +104,27 @@ void game_wake_task(struct task_struct *task);
 void wake_render(struct task_struct *task);
 bool is_frender_sibling(struct task_struct *task);
 extern u8 rinfo_back[0x80];
+/* Native locks replace stock's embedded sequence@0 / raw lock@4 layout.
+ * The omitted render worker owns initialization and raw rinfo_back snapshots. */
+struct migt_render_info {
+	seqlock_t lock;
+	u8 valid;
+	int pid;
+	unsigned long update_jiffies;
+	char comm[TASK_COMM_LEN];
+	u8 unknown_28[0x18];
+};
+extern struct migt_render_info render_info[2];
+extern int migt_render_debug, migt_has_work_todo, migt_init_sucess, g_work;
+extern struct task_struct *migt_thread;
+void reset_render_info(unsigned int index);
+void update_render_info(struct task_struct *task, unsigned int index);
+void set_render_flag(struct task_struct *task, unsigned int index);
+void clean_render_flag(struct task_struct *task, unsigned int index);
+void user_set_game_ip(struct task_struct *task, unsigned int enabled);
+void user_set_game_vip(struct task_struct *task, unsigned int enabled);
+void add_work_to_migt(u32 uid);
+void game_set_cid(void *unused, struct task_struct *task);
 unsigned long is_uuser_set_vip(struct task_struct *task);
 unsigned long is_uuser_set_ip(struct task_struct *task);
 int migt_choose_exclusive_cpu(struct task_struct *task);
@@ -128,6 +152,46 @@ void set_flw_flag(struct task_struct *task, u32 set_bit, u32 clear_bit);
 struct kernel_param;
 int set_flw_enable(const char *value, const struct kernel_param *param);
 int get_flw_enable(char *buffer, const struct kernel_param *param);
+int set_migt_flag(const char *value, const struct kernel_param *param);
+int get_migt_flag(char *buffer, const struct kernel_param *param);
+int set_prefer_cpu_with_check(const char *value, const struct kernel_param *param);
+int set_prefer_cluster_with_check(const char *value, const struct kernel_param *param);
+int set_migt_reserve_cpus_rt(const char *value, const struct kernel_param *param);
+int get_migt_reserve_cpus_rt(char *buffer, const struct kernel_param *param);
+int set_migt_reserve_cpus_mtk_vip(const char *value, const struct kernel_param *param);
+int get_migt_reserve_cpus_mtk_vip(char *buffer, const struct kernel_param *param);
+
+/* Stock .data..percpu+0, five u32 words. Requests use native QoS fields. */
+struct migt_cpu_info {
+	u32 unknown_00, min_freq, configured_min, max_freq, configured_max;
+};
+DECLARE_PER_CPU(struct migt_cpu_info, migt_info);
+DECLARE_PER_CPU(struct freq_qos_request, qos_req_min);
+DECLARE_PER_CPU(struct freq_qos_request, qos_req_max);
+extern int migt_debug, migt_ms, cpu_boost_cycle, boost_cycle;
+extern int vip_task_schedboost, ceiling_from_user;
+extern u8 migt_enabled, ceiling_freq_limit_work;
+extern u32 ceiling_users[10];
+extern int ceiling_users_count;
+/* Real workqueue/delayed-work and CPU-visit lifecycle owners are incomplete. */
+extern struct workqueue_struct *migt_wq;
+extern struct delayed_work migt_rem;
+extern u64 cpus_visit;
+int set_migt_freq(const char *value, const struct kernel_param *param);
+int get_migt_freq(char *buffer, const struct kernel_param *param);
+enum hrtimer_restart do_boost_work(struct hrtimer *timer);
+void do_migt(struct work_struct *work);
+void do_migt_rem(struct work_struct *work);
+void do_ceiling_limit(struct work_struct *work);
+void do_ceiling_rem(struct work_struct *work);
+unsigned int update_policy_online(unsigned int force);
+struct notifier_block;
+int migt_freq_qos_init(struct notifier_block *nb, unsigned long event, void *data);
+void finish_freq_qos_workfn(struct work_struct *work);
+bool glk_enable(void);
+void glk_force_maxfreq_break(u8 value);
+void glk_maxfreq_break(u8 value);
+void glk_minfreq_break(u8 value);
 /* Seven machine arguments recovered at the actual sugov producer.
  * Source typedef/KCFI acceptance remains untested; nothing registers this. */
 void set_next_freq(void *data, unsigned long util, unsigned long mapped_freq,
