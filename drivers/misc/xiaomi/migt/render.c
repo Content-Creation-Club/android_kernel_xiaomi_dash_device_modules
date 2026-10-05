@@ -149,7 +149,8 @@ void add_work_to_migt(u32 uid)
 }
 
 /* .text+0x5f38..0x5f8c. Stock only looks up render status and discards it. */
-void game_set_cid(void *unused, struct task_struct *task)
+/* Fair callback family 0x712bc264 includes the unused rq and flags. */
+void game_set_cid(struct rq *unused_rq, struct task_struct *task, int unused_flags)
 {
 	if (migt_enable() && frame_load_has_init == 1 && flw_enable)
 		is_render_thread(task);

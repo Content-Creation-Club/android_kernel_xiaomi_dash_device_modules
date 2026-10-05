@@ -10,6 +10,7 @@
 #include <linux/seqlock.h>
 #include <linux/workqueue.h>
 #include "../mi_schedule/mi_schedule.h"
+struct rq;
 
 /* Caller-owned suffix of mi_task_struct, beginning at stock offset 0x1a0.
  * Unnamed fields retain offsets. No independent allocation is permitted. */
@@ -92,9 +93,9 @@ bool package_runtime_should_stop(void);
 struct migt_task_state *get_gt_task(struct task_struct *task);
 unsigned long game_task(struct task_struct *task);
 unsigned long game_super_task(struct task_struct *task);
-unsigned long game_ssuper_task(struct task_struct *task);
+bool game_ssuper_task(struct task_struct *task);
 unsigned long game_vip_task(struct task_struct *task);
-unsigned long game_vvip_task(struct task_struct *task);
+bool game_vvip_task(struct task_struct *task);
 unsigned long game_ip_task(struct task_struct *task);
 unsigned int is_render_thread(struct task_struct *task);
 bool game_render_task(struct task_struct *task);
@@ -105,7 +106,8 @@ void wake_render(struct task_struct *task);
 bool is_frender_sibling(struct task_struct *task);
 extern u8 rinfo_back[0x80];
 /* Native locks replace stock's embedded sequence@0 / raw lock@4 layout.
- * The omitted render worker owns initialization and raw rinfo_back snapshots. */
+ * Recovered migt_sched_init initializes the locks; migt_hardwork writes
+ * rinfo_back snapshots. Whole-module invocation/storage remains absent. */
 struct migt_render_info {
 	seqlock_t lock;
 	u8 valid;
@@ -124,7 +126,7 @@ void clean_render_flag(struct task_struct *task, unsigned int index);
 void user_set_game_ip(struct task_struct *task, unsigned int enabled);
 void user_set_game_vip(struct task_struct *task, unsigned int enabled);
 void add_work_to_migt(u32 uid);
-void game_set_cid(void *unused, struct task_struct *task);
+void game_set_cid(struct rq *unused_rq, struct task_struct *task, int unused_flags);
 unsigned long is_uuser_set_vip(struct task_struct *task);
 unsigned long is_uuser_set_ip(struct task_struct *task);
 int migt_choose_exclusive_cpu(struct task_struct *task);

@@ -80,7 +80,7 @@ unsigned long game_super_task(struct task_struct *task)
 	return gt ? GT_FLAGS(gt) & 0x100 : 0;
 }
 
-unsigned long game_ssuper_task(struct task_struct *task)
+bool game_ssuper_task(struct task_struct *task)
 {
 	return game_super_task(task) >> 8;
 }
@@ -112,7 +112,7 @@ unsigned long game_vip_task(struct task_struct *task)
 	return flags & 8 ? 0 : flags & 0x1d0;
 }
 
-unsigned long game_vvip_task(struct task_struct *task)
+bool game_vvip_task(struct task_struct *task)
 {
 	return game_vip_task(task) != 0;
 }

@@ -3,6 +3,11 @@
 #define _XIAOMI_METIS_VIP_QUEUE_H
 
 #include "metis_lowlt.h"
+#include "metis_cluster_boost.h"
+#include "metis_deadline.h"
+#include "metis_monitor.h"
+#include "metis_schlat.h"
+#include "metis_wakeup.h"
 
 struct rq;
 struct cfs_rq;
@@ -24,24 +29,15 @@ extern s64 frame_boost_start, vtask_monitor_beg_us, vtask_monitor_end_us;
  * initialization are still absent; do not create per-callsite substitutes. */
 extern u8 metis_task_of_already_done;
 
-/* Missing policy/monitor controllers: real dependencies, no fallback bodies. */
-void monitor_task_enqueue(struct mi_task_struct *state);
-void metis_wakeup_enqueue_task_hook(struct rq *rq, struct task_struct *task);
-void metis_schlat_dequeue_entity_hook(unsigned int cpu,
-				    struct task_struct *task);
-void metis_deadline_enqueue_task(unsigned int cpu, struct task_struct *task);
-void metis_deadline_dequeue_task(unsigned int cpu, struct task_struct *task);
-struct task_struct *metis_deadline_pick_next_task(unsigned int cpu);
-void get_frame_boost_end(unsigned long *duration);
-void restore_boost_cluster(unsigned int cluster);
-void boost_cluster(unsigned int cluster, int mode, int update_cpu, int update_freq);
-void mi_restore_rt_binder_free(struct task_struct *task);
+/* Policy bodies now come from their actual sibling headers. Their full
+ * state initialization, registration and provider lifecycle remain absent. */
 
 void __enqueue_vip_task(unsigned int cpu, struct task_struct *task);
 void __dequeue_vip_task(unsigned int cpu, struct task_struct *task);
 void before_enqueue_vip_task(struct rq *rq, struct task_struct *task, int flags);
 void dequeue_vip_task(struct rq *rq, struct task_struct *task);
-void mi_dequeue_task_fair_hook(struct rq *rq, struct task_struct *task);
+/* flags is unused by this body, but belongs to its real fair callback ABI. */
+void mi_dequeue_task_fair_hook(struct rq *rq, struct task_struct *task, int flags);
 void register_mi_enqueue_entity_hook(metis_enqueue_entity_fn hook);
 void unregister_mi_enqueue_entity_hook(void);
 struct task_struct *mi_pick_task_fair(unsigned int cpu);

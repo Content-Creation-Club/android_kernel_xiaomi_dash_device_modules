@@ -300,7 +300,7 @@ void before_enqueue_vip_task(struct rq *rq, struct task_struct *task, int flags)
 		pr_info("metis-fas: task %d enqueue rbtree vip\n", task->pid);
 }
 
-void mi_dequeue_task_fair_hook(struct rq *rq, struct task_struct *task)
+void mi_dequeue_task_fair_hook(struct rq *rq, struct task_struct *task, int flags)
 {
 	struct mi_task_struct *state;
 	unsigned int cluster;
