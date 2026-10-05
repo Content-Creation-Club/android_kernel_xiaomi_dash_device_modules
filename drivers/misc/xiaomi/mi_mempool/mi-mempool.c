@@ -28,6 +28,7 @@
 #include <linux/vmstat.h>
 #include <asm/mte.h>
 #include <trace/hooks/mm.h>
+#include <trace/hooks/sched.h>
 
 #define POOL_COUNT 4
 #define PROCESS_COUNT 15
