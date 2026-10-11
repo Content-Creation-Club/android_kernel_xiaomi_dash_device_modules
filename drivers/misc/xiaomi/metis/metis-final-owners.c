@@ -82,7 +82,7 @@ metis_walt_fn mi_walt_get_indicies_func[3];
 metis_energy_fn wake_render_func[3];
 metis_fair_task_fn mi_enqueue_task_fair_func[3];
 metis_fair_task_fn mi_dequeue_task_fair_func[3];
-metis_cpu_util_without_fn get_cpu_util_without;
+void *get_cpu_util_without; /* UNKNOWN callback typedef; storage only. */
 metis_skip_cpus_fn game_migt_skip_cpus_metis_hook;
 u32 stask_prefer_cluster, render_prefer_cluster, vip_prefer_cluster;
 metis_sched_enable_fn mi_sched_enable[3];

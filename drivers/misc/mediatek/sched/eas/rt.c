@@ -5,7 +5,6 @@
 #include <linux/sched/cputime.h>
 #include <sched/sched.h>
 #include <linux/cpuidle.h>
-#include <linux/xiaomi_metis.h>
 #include "../sugov/cpufreq.h"
 #include "common.h"
 #include "eas_plus.h"
@@ -691,10 +690,6 @@ void mtk_find_lowest_rq(void *data, struct task_struct *p, struct cpumask *lowes
 	if (!get_eas_hook())
 		return;
 
-	/* Stock initializes this private mask even on the !ret path. */
-	if (IS_REACHABLE(CONFIG_XIAOMI_METIS))
-		cpumask_clear(&avail_lowest_mask);
-
 	rt_energy_aware_output_init(&rt_ea_output, p);
 	rt_ea_output.rt_aggre_preempt_enable = rt_aggre_preempt_enable;
 
@@ -705,8 +700,6 @@ void mtk_find_lowest_rq(void *data, struct task_struct *p, struct cpumask *lowes
 		goto out; /* No targets found */
 	}
 
-	if (IS_REACHABLE(CONFIG_XIAOMI_METIS))
-		metis_wakeup_cold_start_skip_ui_cpumask(p, lowest_mask);
 	cpumask_andnot(&avail_lowest_mask, lowest_mask, cpu_pause_mask);
 	cpumask_and(&avail_lowest_mask, &avail_lowest_mask, cpu_active_mask);
 
@@ -820,21 +813,6 @@ unlock:
 	select_reason = LB_RT_FAIL;
 out:
 	irq_log_store();
-
-	if (IS_REACHABLE(CONFIG_XIAOMI_METIS)) {
-		metis_coldstart_rt_find_lowest_rq(&avail_lowest_mask, ret,
-				lowest_cpu);
-		/* Stock 001237e4 excludes 0x1000 (LB_RT_FAIL), while its
-		 * no-target reason is 0x80000 (LB_RT_NO_LOWEST_RQ). */
-		if (*lowest_cpu == -1 && select_reason != LB_RT_FAIL) {
-			cpu = cpumask_any_and_distribute(&avail_lowest_mask,
-					cpu_possible_mask);
-			if (cpu < nr_cpu_ids) {
-				*lowest_cpu = cpu;
-				select_reason = LB_RT_FAIL_FIRST;
-			}
-		}
-	}
 
 	if (trace_sched_find_lowest_rq_enabled())
 		trace_sched_find_lowest_rq(p, select_reason, *lowest_cpu,

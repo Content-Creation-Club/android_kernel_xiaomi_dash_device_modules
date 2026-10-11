@@ -9,7 +9,6 @@
 #include <linux/sched.h>
 #include <linux/seqlock.h>
 #include <linux/workqueue.h>
-#include <linux/xiaomi_metis.h>
 #include "../mi_schedule/mi_schedule.h"
 struct rq;
 
@@ -205,5 +204,6 @@ void set_next_freq(void *data, unsigned long util, unsigned long mapped_freq,
 		unsigned long max, unsigned long *freq, struct cpufreq_policy *policy,
 		bool *need_update);
 
-/* module-lifecycle.c publishes the scheduler-owned shared controller slot. */
+/* Imported slot ABI: module-lifecycle.c assigns/clears the actual provider. */
+extern int (*migt_sched_enable)(void);
 #endif
