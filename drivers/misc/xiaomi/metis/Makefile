@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Parent traversal is wired; target configuration/package activation is deferred.
-ccflags-y += -I$(srctree) -I$(srctree)/kernel -I$(src)
+ccflags-y += -I$(srctree) -I$(srctree)/kernel -I$(srctree)/$(src)
 obj-$(CONFIG_XIAOMI_METIS) += metis.o
 metis-y := metis-state.o metis-classify.o metis-callbacks.o metis-lowlt.o \
 	metis-blocked.o metis-binder-request.o metis-link.o metis-common.o \
