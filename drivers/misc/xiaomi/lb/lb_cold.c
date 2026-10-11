@@ -4,6 +4,7 @@
 #include <linux/cred.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/kthread.h>

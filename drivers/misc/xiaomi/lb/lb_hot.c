@@ -3,6 +3,7 @@
 #include <linux/bitmap.h>
 #include <linux/cred.h>
 #include <uapi/linux/fadvise.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/ktime.h>
