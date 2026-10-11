@@ -37,7 +37,6 @@
 #include <linux/cpufreq.h>
 #include <linux/irq_work.h>
 #include <linux/power_supply.h>
-#include <linux/xiaomi_migt.h>
 #include "sugov/cpufreq.h"
 #include "eas/vip.h"
 
@@ -59,35 +58,6 @@
 #include "fbt_cpu_ux.h"
 #include "fpsgo_frame_info.h"
 #include "cpuqos_sys_common.h"
-
-static migt_affinity_fn game_migt_should_skip_affinity_task_hook;
-static migt_group_fn game_migt_group_dep_hook;
-
-void register_game_migt_should_skip_affinity_task_hook(migt_affinity_fn hook)
-{
-	if (hook)
-		WRITE_ONCE(game_migt_should_skip_affinity_task_hook, hook);
-}
-EXPORT_SYMBOL_GPL(register_game_migt_should_skip_affinity_task_hook);
-
-void unregister_game_migt_should_skip_affinity_task_hook(void)
-{
-	WRITE_ONCE(game_migt_should_skip_affinity_task_hook, NULL);
-}
-EXPORT_SYMBOL_GPL(unregister_game_migt_should_skip_affinity_task_hook);
-
-void register_game_migt_group_dep_hook(migt_group_fn hook)
-{
-	if (hook)
-		WRITE_ONCE(game_migt_group_dep_hook, hook);
-}
-EXPORT_SYMBOL_GPL(register_game_migt_group_dep_hook);
-
-void unregister_game_migt_group_dep_hook(void)
-{
-	WRITE_ONCE(game_migt_group_dep_hook, NULL);
-}
-EXPORT_SYMBOL_GPL(unregister_game_migt_group_dep_hook);
 
 #define GED_VSYNC_MISS_QUANTUM_NS 16666666
 #define TIME_3MS  3000000
@@ -1319,7 +1289,6 @@ static int fbt_affinity_task(int affinity, int pid, int group, int llf_light,
 	int prefer = FPSGO_PREFER_NONE;
 	int ret = 0;
 	struct cpumask cpu_mask;
-	migt_affinity_fn skip_affinity;
 
 	if (!pid)
 		return -EINVAL;
@@ -1344,12 +1313,6 @@ static int fbt_affinity_task(int affinity, int pid, int group, int llf_light,
 	}
 
 	policy = affinity;
-	skip_affinity = READ_ONCE(game_migt_should_skip_affinity_task_hook);
-	if (skip_affinity && skip_affinity()) {
-		fbt_set_affinity(pid, FPSGO_PREFER_NONE);
-		fpsgo_systrace_c_fbt_debug(pid, 0, 1, "task_policy_migt_skip");
-		goto DONE;
-	}
 	switch (policy)  {
 	case FPSGO_BAFFINITY_B:
 		if (group == FPSGO_GROUP_HEAVY)
@@ -2152,17 +2115,11 @@ static int fbt_group_dep(int group_by_lr, struct fpsgo_loading *dep_arr, int dep
 	// manual add to second group
 	for (i = 0; i < dep_size; i++) {
 		struct fpsgo_loading *fl = &dep_arr[i];
-		migt_group_fn group_hook;
 
 		if (fl->action == XGF_ADD_DEP_FORCE_GROUPING_HEAVY)
 			fl->heavyidx = FPSGO_GROUP_HEAVY;
 
 		if (fl->action == XGF_ADD_DEP_FORCE_GROUPING_SECOND)
-			fl->heavyidx = FPSGO_GROUP_SECOND;
-
-		group_hook = READ_ONCE(game_migt_group_dep_hook);
-		if (fl->heavyidx == FPSGO_GROUP_OTHERS && group_hook &&
-				group_hook(fl->pid))
 			fl->heavyidx = FPSGO_GROUP_SECOND;
 	}
 	return ret;
@@ -2777,7 +2734,6 @@ void fbt_set_min_cap_locked(struct render_info *thr, int min_cap,
 		int group_affinity_final = boost_affinity_final;
 		int group_prefer_final = gh_prefer_final;
 		int group_affinity_mask[FPSGO_MAX_GROUP];
-		migt_group_fn group_hook;
 
 		group_affinity_mask[FPSGO_GROUP_HEAVY] = user_cpumask[FPSGO_GROUP_HEAVY];
 		group_affinity_mask[FPSGO_GROUP_SECOND] = user_cpumask[FPSGO_GROUP_SECOND];
@@ -2835,11 +2791,9 @@ void fbt_set_min_cap_locked(struct render_info *thr, int min_cap,
 			fbt_task_set_pmu(&thr->pmu_info_tree, separate_aa_final, light_thread,
 			fl->action, fl->pid, fl->heavyidx, cur_ts);
 
-		group_hook = READ_ONCE(game_migt_group_dep_hook);
 		if ((boost_LR_final && fbt_is_R_L_task(fl->pid, heaviest_pid, second_heavy_pid, thr->pid)) ||
 				(boost_affinity_final && fl->heavyidx) ||
-				(boost_affinity_final == FPSGO_BAFFINITY_B_M && fl->action == XGF_ADD_DEP_NO_LLF) ||
-				(group_hook && group_hook(fl->pid))
+				(boost_affinity_final == FPSGO_BAFFINITY_B_M && fl->action == XGF_ADD_DEP_NO_LLF)
 		)
 			fbt_nice_task(fl->pid, 1, &fl->ori_nice);
 		else

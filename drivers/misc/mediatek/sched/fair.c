@@ -22,7 +22,6 @@
 #include "mtk_energy_model/v1/energy_model.h"
 #endif
 #include "common.h"
-#include "migt_hooks.h"
 #include "../../xiaomi/mi_schedule/mi_schedule.h"
 #include <sched/pelt.h>
 #include <linux/stop_machine.h>
@@ -41,44 +40,6 @@
 #include "sched_trace.h"
 
 MODULE_LICENSE("GPL");
-
-/* Stock accepts non-NULL registration and clears only on unregister. */
-#define DEFINE_MIGT_SCHED_HOOK(name, type) \
-	type game_migt_##name##_hook; \
-	void register_game_migt_##name##_hook(type hook) \
-	{ \
-		if (hook) \
-			game_migt_##name##_hook = hook; \
-	} \
-	EXPORT_SYMBOL_GPL(register_game_migt_##name##_hook); \
-	void unregister_game_migt_##name##_hook(void) \
-	{ \
-		game_migt_##name##_hook = NULL; \
-	} \
-	EXPORT_SYMBOL_GPL(unregister_game_migt_##name##_hook)
-
-DEFINE_MIGT_SCHED_HOOK(select_cpu, migt_select_cpu_fn);
-DEFINE_MIGT_SCHED_HOOK(skip_cpus, migt_skip_cpus_fn);
-DEFINE_MIGT_SCHED_HOOK(should_skip_this_cpu_rt, migt_task_cpu_fn);
-DEFINE_MIGT_SCHED_HOOK(should_skip_migrate, migt_task_cpu_fn);
-DEFINE_MIGT_SCHED_HOOK(skip_sched_tick_migrate, migt_task_cpu_fn);
-DEFINE_MIGT_SCHED_HOOK(should_skip_newidle_balance, migt_cpu_fn);
-DEFINE_MIGT_SCHED_HOOK(skip_lowest_rt, migt_mask_fn);
-DEFINE_MIGT_SCHED_HOOK(skip_vip_cpus, migt_mask_fn);
-
-#undef DEFINE_MIGT_SCHED_HOOK
-
-/* Use the native rq CPU and capacity APIs, as flt_cal.c does. */
-u64 scale_exec_time(u64 delta, struct rq *rq)
-{
-	unsigned long cie = arch_scale_cpu_capacity(cpu_of(rq));
-	unsigned long fie = arch_scale_freq_capacity(cpu_of(rq));
-
-	delta = cap_scale(delta, cie);
-	delta = cap_scale(delta, fie);
-	return delta;
-}
-EXPORT_SYMBOL_GPL(scale_exec_time);
 
 /*
  * Unsigned subtract and clamp on underflow.
@@ -1123,12 +1084,6 @@ void mtk_can_migrate_task(void *data, struct task_struct *p,
 	struct cpumask eff_mask;
 	int src_cpu = task_cpu(p), num_vip_src, num_vip_dst;
 
-	if (game_migt_should_skip_migrate_hook &&
-	    game_migt_should_skip_migrate_hook(p, dst_cpu)) {
-		*can_migrate = false;
-		return;
-	}
-
 	if (!get_eas_hook())
 		return;
 
@@ -1993,12 +1948,6 @@ static void mtk_find_best_candidates(struct cpumask *candidates, struct task_str
 	bool is_vip = fbc_params->is_vip;
 	int vip_prio = fbc_params->vip_prio;
 	struct cpumask vip_candidate = fbc_params->vip_candidate;
-	struct cpumask migt_skipped;
-	bool migt_skip = false;
-
-	cpumask_clear(&migt_skipped);
-	if (game_migt_skip_cpus_hook)
-		migt_skip = game_migt_skip_cpus_hook(&migt_skipped);
 
 	if (!latency_sensitive && !is_vip) {
 		int compress_cpu = compress_to_cpu(p, order_index);
@@ -2074,9 +2023,6 @@ static void mtk_find_best_candidates(struct cpumask *candidates, struct task_str
 					continue;
 			}
 // Interfere with all possible core selections, including VIP threads.
-			if (migt_skip && cpumask_test_cpu(cpu, &migt_skipped))
-				continue;
-
 			cpu_util = mtk_cpu_util_next(cpu, p, cpu, 0);
 			cpu_util_without_uclamp = cpu_util;
 			cpu_util_without_p = mtk_cpu_util_next(cpu, p, -1, 0);
@@ -2297,16 +2243,6 @@ void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_c
 	}
 
 	irq_log_store();
-
-	if (game_migt_select_cpu_hook) {
-		int migt_cpu = game_migt_select_cpu_hook(p);
-
-		if (migt_cpu != -1 && cpumask_test_cpu(migt_cpu, p->cpus_ptr)) {
-			rcu_read_unlock();
-			*new_cpu = migt_cpu;
-			goto done;
-		}
-	}
 
 	if (sync && cpu_rq(this_cpu)->nr_running == 1 &&
 	    cpumask_test_cpu(this_cpu, p->cpus_ptr) &&
@@ -2695,9 +2631,6 @@ static struct task_struct *detach_a_hint_task(struct rq *src_rq, int dst_cpu)
 		}
 	}
 	p = best_task ? best_task : backup;
-	if (p && game_migt_should_skip_migrate_hook &&
-	    game_migt_should_skip_migrate_hook(p, dst_cpu))
-		p = NULL;
 	if (p) {
 		/* detach_task */
 		deactivate_task(src_rq, p, DEQUEUE_NOCLOCK);
@@ -2908,12 +2841,6 @@ void mtk_sched_newidle_balance(void *data, struct rq *this_rq, struct rq_flags *
 	if (!cpu_active(this_cpu))
 		return;
 
-	if (game_migt_should_skip_newidle_balance_hook &&
-	    game_migt_should_skip_newidle_balance_hook(this_cpu)) {
-		*done = 1;
-		return;
-	}
-
 	now_ns = ktime_get_real_ns();
 
 	if (now_ns < per_cpu(next_update_new_balance_time_ns, this_cpu))
@@ -2962,8 +2889,6 @@ void mtk_sched_newidle_balance(void *data, struct rq *this_rq, struct rq_flags *
 					cpumask_test_cpu(this_cpu, p->cpus_ptr) &&
 					!(latency_sensitive &&
 					!cpumask_test_cpu(this_cpu, &effective_softmask))
-					&& !(game_migt_should_skip_migrate_hook &&
-					game_migt_should_skip_migrate_hook(p, this_cpu))
 					) {
 
 					misfit_task_rq = src_rq;

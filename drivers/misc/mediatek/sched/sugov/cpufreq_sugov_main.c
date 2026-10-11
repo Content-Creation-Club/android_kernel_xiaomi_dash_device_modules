@@ -31,7 +31,6 @@
 #include <trace/hooks/cpufreq.h>
 #include <linux/sched/cpufreq.h>
 #include <linux/kthread.h>
-#include <linux/xiaomi_migt.h>
 #include <uapi/linux/sched/types.h>
 #if IS_ENABLED(CONFIG_MTK_THERMAL_INTERFACE)
 #include <thermal_interface.h>
@@ -45,21 +44,6 @@
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
 #define DEFAULT_RUNNABLE_BOOST	true
 #define DEFAULT_DSU_IDLE		true
-
-static migt_oem_freq_fn oem_set_freq_hook;
-
-void register_oem_freq_hook(migt_oem_freq_fn hook)
-{
-	if (hook)
-		WRITE_ONCE(oem_set_freq_hook, hook);
-}
-EXPORT_SYMBOL_GPL(register_oem_freq_hook);
-
-void unregister_oem_freq_hook(void)
-{
-	WRITE_ONCE(oem_set_freq_hook, NULL);
-}
-EXPORT_SYMBOL_GPL(unregister_oem_freq_hook);
 
 struct sugov_cpu {
 	struct update_util_data	update_util;
@@ -254,21 +238,10 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned int freq = policy->cpuinfo.max_freq;
 	unsigned long next_freq = 0;
-	migt_oem_freq_fn freq_hook;
-	bool need_update = false;
 
 	mtk_map_util_freq((void *)sg_policy, util, policy->related_cpus, &next_freq);
 	if (next_freq) {
 		freq = next_freq;
-		freq_hook = READ_ONCE(oem_set_freq_hook);
-		if (freq_hook) {
-			next_freq = freq;
-			freq_hook(NULL, util, next_freq, max, &next_freq,
-					policy, &need_update);
-			freq = next_freq;
-			if (need_update)
-				freq = cpufreq_driver_resolve_freq(policy, freq);
-		}
 	} else {
 		freq = map_util_freq(util, freq, max);
 		if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)

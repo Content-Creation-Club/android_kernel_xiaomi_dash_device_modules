@@ -9,7 +9,6 @@
 #include <trace/hooks/sched.h>
 #include <trace/hooks/cgroup.h>
 #include "common.h"
-#include "../migt_hooks.h"
 #include "vip.h"
 #include "sched_trace.h"
 #include "eas_plus.h"
@@ -123,7 +122,6 @@ struct cpumask find_min_num_vip_cpus(struct perf_domain *pd, struct task_struct 
 	unsigned int num_vip_in_cpu_arr[MAX_NR_CPUS] = {[0 ... MAX_NR_CPUS-1] = -1};
 	bool failed = false;
 	struct cpumask allowed_cpu_mask_for_slow, *pd_cpumask;
-	struct cpumask migt_skipped;
 	int cluster;
 
 	cpumask_clear(&vip_candidate);
@@ -134,9 +132,6 @@ struct cpumask find_min_num_vip_cpus(struct perf_domain *pd, struct task_struct 
 	}
 
 	cpumask_clear(&allowed_cpu_mask_for_slow);
-	cpumask_clear(&migt_skipped);
-	if (game_migt_skip_vip_cpus_hook)
-		game_migt_skip_vip_cpus_hook(&migt_skipped);
 	/* fast path: find min num SP(Same Prio) VIP within CPUs don't have higher prio */
 
 	for (cluster = 0; cluster < num_sched_clusters; cluster++) {
@@ -156,9 +151,6 @@ struct cpumask find_min_num_vip_cpus(struct perf_domain *pd, struct task_struct 
 				continue;
 
 			if (cpu_high_irqload(cpu))
-				continue;
-
-			if (cpumask_test_cpu(cpu, &migt_skipped))
 				continue;
 
 			cpumask_set_cpu(cpu, allowed_cpu_mask);
