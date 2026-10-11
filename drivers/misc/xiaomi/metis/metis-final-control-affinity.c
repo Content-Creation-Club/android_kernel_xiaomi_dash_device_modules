@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include <asm/compat.h>
+#include <linux/compat.h>
 #include <linux/bitops.h>
 #include <linux/cpumask.h>
 #include <linux/errno.h>
