@@ -2,6 +2,7 @@
 #ifndef _XIAOMI_METIS_FINAL_OWNERS_H
 #define _XIAOMI_METIS_FINAL_OWNERS_H
 
+#include <linux/xiaomi_metis.h>
 #include "metis-final-control.h"
 #include "metis-final-link.h"
 #include "metis-final-boost.h"
@@ -18,8 +19,8 @@ extern u32 reader_biased_jif_for_vip, metis_io_debug;
 extern unsigned int n_freq;
 extern char version[64];
 
-/* Stock .bss+0x15a40, eight zero bytes. The callback's family86f86ddd
- * typedef remains UNKNOWN. This storage has no callable C interface. */
-extern void *get_cpu_util_without;
+/* Stock .bss+0x15a40 is an initially empty callback slot. Its current
+ * callable type comes from the paired native provider's shared header;
+ * the original canonical typedef remains UNKNOWN. */
 
 #endif

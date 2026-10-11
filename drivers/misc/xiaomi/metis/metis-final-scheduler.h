@@ -5,6 +5,7 @@
 #include <linux/cpumask.h>
 #include <linux/percpu.h>
 #include <linux/sysctl.h>
+#include <linux/xiaomi_metis.h>
 #include "metis_vip_queue.h"
 #include "metis_coldstart_policy.h"
 #include "metis_walt_policy.h"
@@ -104,10 +105,10 @@ void metis_final_preempt_wakeup_policy(struct rq *rq, struct task_struct *task,
 void metis_final_coldstart_lowest_policy(struct cpumask *mask, int found,
 		int *lowest);
 
-/* Explicit carrier interface, NOT the original get_cpu_util_without ABI.
- * Signature is the actual current native common.h mtk_cpu_util_next API;
- * caller must supply that real provider, with no callback cast. Stock
- * get_cpu_util_without family86f86ddd/native private context remain open. */
+/* Private algorithm carrier. The native scheduler adapter translates its
+ * actual two-argument utility slot into these fixed (-1, 0) requests.
+ * Original get_cpu_util_without family86f86ddd remains reference evidence,
+ * not a manually assigned CFI identity for the native implementation. */
 typedef unsigned long (*metis_final_native_util_fn)(int cpu,
 		struct task_struct *task, int destination_cpu, int boost);
 int metis_final_tp_choose_policy(struct task_struct *task,

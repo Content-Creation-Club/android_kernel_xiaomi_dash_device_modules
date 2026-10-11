@@ -11,6 +11,7 @@
 #include <linux/sched/cputime.h>
 #include <sched/sched.h>
 #include <linux/sched/clock.h>
+#include <linux/xiaomi_metis.h>
 #include "eas/eas_plus.h"
 #include "eas/shortcut/compress.h"
 #include "sugov/cpufreq.h"
@@ -21,6 +22,7 @@
 #include "mtk_energy_model/v1/energy_model.h"
 #endif
 #include "common.h"
+#include "../../xiaomi/mi_schedule/mi_schedule.h"
 #include <sched/pelt.h>
 #include <linux/stop_machine.h>
 #include <linux/kthread.h>
@@ -738,6 +740,10 @@ static void __sched_fork_init(struct task_struct *p)
 
 static void android_rvh_sched_fork_init(void *unused, struct task_struct *p)
 {
+	/* Stock scheduler 0012b190 creates the Xiaomi task state before
+	 * initializing MTK soft affinity. METIS consumes this real owner. */
+	if (IS_REACHABLE(CONFIG_XIAOMI_MI_SCHEDULE))
+		mi_task_fork(NULL, p);
 	__sched_fork_init(p);
 }
 
@@ -1112,6 +1118,13 @@ void mtk_can_migrate_task(void *data, struct task_struct *p,
 __read_mostly int num_sched_clusters;
 cpumask_t __read_mostly ***cpu_array;
 
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+static unsigned long metis_cpu_util_without(int cpu, struct task_struct *p)
+{
+	return mtk_cpu_util_next(cpu, p, -1, 0);
+}
+#endif
+
 void init_cpu_array(void)
 {
 	int i, j;
@@ -1172,6 +1185,9 @@ void build_cpu_array(void)
 			k++;
 		}
 	}
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+	WRITE_ONCE(metis_lb_cpu_array, cpu_array);
+#endif
 }
 
 void free_cpu_array(void)
@@ -1180,6 +1196,13 @@ void free_cpu_array(void)
 
 	if (!cpu_array)
 		return;
+
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+	if (READ_ONCE(metis_lb_cpu_array) == cpu_array)
+		WRITE_ONCE(metis_lb_cpu_array, NULL);
+	if (READ_ONCE(get_cpu_util_without) == metis_cpu_util_without)
+		WRITE_ONCE(get_cpu_util_without, NULL);
+#endif
 
 	for (i = 0; i < num_sched_clusters; i++) {
 		for (j = 0; j < num_sched_clusters; j++) {
@@ -2130,6 +2153,9 @@ static DEFINE_PER_CPU(cpumask_t, energy_cpus);
 
 void (*vip_loom_select_task_rq_fair_hook)(struct task_struct *p, int *target_cpu, int *flag);
 EXPORT_SYMBOL(vip_loom_select_task_rq_fair_hook);
+int (*migt_sched_enable)(void);
+EXPORT_SYMBOL_GPL(migt_sched_enable);
+
 void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_cpu, int sync,
 					int *new_cpu)
 {
@@ -2205,7 +2231,12 @@ void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_c
 			order_index, end_index, reverse);
 	}
 #endif
-	if (!pd || READ_ONCE(rd->overutilized)) {
+	if ((!pd || READ_ONCE(rd->overutilized))
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+		&& !metis_vip_task(p)
+		&& !(migt_sched_enable && migt_sched_enable())
+#endif
+	) {
 		select_reason = LB_FAIL;
 		rcu_read_unlock();
 		goto fail;
@@ -2216,6 +2247,9 @@ void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_c
 	if (sync && cpu_rq(this_cpu)->nr_running == 1 &&
 	    cpumask_test_cpu(this_cpu, p->cpus_ptr) &&
 	    task_fits_capacity(p, capacity_of(this_cpu), get_adaptive_margin(this_cpu)) &&
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+	    !metis_vip_task(p) &&
+#endif
 	    !(latency_sensitive && !cpumask_test_cpu(this_cpu, &effective_softmask))) {
 		rcu_read_unlock();
 		*new_cpu = this_cpu;
@@ -2270,9 +2304,32 @@ void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_c
 	candidates = this_cpu_ptr(&energy_cpus);
 	cpumask_clear(candidates);
 
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+	if (!READ_ONCE(get_cpu_util_without))
+		WRITE_ONCE(get_cpu_util_without, metis_cpu_util_without);
+	if (metis_vip_task(p) || (migt_sched_enable && migt_sched_enable())) {
+		struct cpumask metis_skipped;
+		bool metis_skip = false;
+		int metis_cpu;
+
+		cpumask_clear(&metis_skipped);
+		metis_cpu = metis_choose_cpu_fastpath(p, uclamp_task_util(p),
+				&metis_skipped, cpu_pause_mask, order_index,
+				end_index, &metis_skip);
+		/* Stock supplies these outputs but never consumes them later. */
+		if (metis_cpu >= 0) {
+			cpumask_set_cpu(metis_cpu, candidates);
+			goto select_energy;
+		}
+	}
+#endif
+
 	mtk_find_best_candidates(candidates, p, &effective_softmask, &allowed_cpu_mask,
 		&eenv, &fbc_params, &sys_max_spare_cap_cpu, &idle_max_spare_cap_cpu, cpu_utils);
 
+#if IS_REACHABLE(CONFIG_XIAOMI_METIS)
+select_energy:
+#endif
 	irq_log_store();
 
 	/* select best energy cpu in candidates */

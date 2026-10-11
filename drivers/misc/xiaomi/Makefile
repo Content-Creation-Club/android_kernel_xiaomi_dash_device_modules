@@ -42,6 +42,7 @@ obj-$(CONFIG_XIAOMI_MI_MEMPOOL) += mi_mempool/
 obj-$(CONFIG_XIAOMI_IO_MONITOR) += io_monitor/
 obj-$(CONFIG_XIAOMI_LB) += lb/
 obj-$(CONFIG_XIAOMI_MI_SCHEDULE) += mi_schedule/
+obj-$(CONFIG_XIAOMI_METIS) += metis/
 obj-$(CONFIG_XIAOMI_XR_QI) += xr_qi/
 obj-$(CONFIG_XIAOMI_XR_QS) += xr_qs/
 obj-y += miwill/

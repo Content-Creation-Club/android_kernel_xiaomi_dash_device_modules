@@ -2,11 +2,13 @@
 config XIAOMI_METIS
 	tristate "Xiaomi METIS stock reconstruction"
 	depends on ARM64 && ANDROID_VENDOR_HOOKS && ANDROID_VENDOR_OEM_DATA
+	depends on XIAOMI_MI_SCHEDULE && XIAOMI_XR_QI
 	default n
 	help
 	  Experimental reconstruction from dash OS3.0.305 METIS. Original
-	  defects are retained. Stock machine-entry bridges are saved, while
-	  canonical C/MODVERSIONS contracts and genuine provider integration
-	  remain unresolved; see RECONSTRUCTION.md. Leaf source
-	  metadata does not activate parent traversal or package the module.
+	  defects are retained. Shared native C interfaces connect the MTK
+	  preemption, RT-lowest and placement providers. Rebuild scheduler
+	  and METIS together; original stock C/MODVERSIONS compatibility
+	  remains unresolved. See RECONSTRUCTION.md. The default is disabled;
+	  this option does not select a target configuration or package the module.
 	  Native compilation, KMI/CFI, loading and runtime remain untested.

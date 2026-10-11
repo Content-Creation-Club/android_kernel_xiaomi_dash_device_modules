@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Stock OS3.0.305 GPL export table: 148 original symbols.
- * Three original entries have observed machine-ABI assembly bridges, but
- * their canonical C types/MODVERSIONS remain unresolved. Their exports are
- * deliberately absent; no guessed declaration or CRC is supplied:
- * metis_choose_cpu_fastpath, mi_check_preempt_wakeup_hook,
- * metis_coldstart_rt_find_lowest_rq. Native KMI/CFI/linking are UNTESTED. */
+ * The three scheduler entries now use shared native-adapted C contracts.
+ * Rebuild their provider callers together; original canonical types and
+ * stock MODVERSIONS compatibility remain unresolved. No CRC or CFI identity
+ * is supplied by hand. Native KMI/CFI/linking are UNTESTED. */
 #include <linux/export.h>
 #include "metis_common.h"
 #include "metis_state.h"
@@ -70,6 +69,9 @@ EXPORT_SYMBOL_GPL(wake_render_func);
 EXPORT_SYMBOL_GPL(mi_enqueue_task_fair_func);
 EXPORT_SYMBOL_GPL(mi_dequeue_task_fair_func);
 EXPORT_SYMBOL_GPL(get_cpu_util_without);
+EXPORT_SYMBOL_GPL(metis_choose_cpu_fastpath);
+EXPORT_SYMBOL_GPL(mi_check_preempt_wakeup_hook);
+EXPORT_SYMBOL_GPL(metis_coldstart_rt_find_lowest_rq);
 EXPORT_SYMBOL_GPL(register_game_migt_skip_cpus_metis_hook);
 EXPORT_SYMBOL_GPL(unregister_game_migt_skip_cpus_metis_hook);
 EXPORT_SYMBOL_GPL(set_prefer_cluster_with_check);

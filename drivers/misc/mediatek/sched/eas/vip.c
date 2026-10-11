@@ -4,6 +4,7 @@
  */
 #include <linux/sched.h>
 #include <linux/sched/cputime.h>
+#include <linux/xiaomi_metis.h>
 #include <sched/sched.h>
 #include <trace/hooks/sched.h>
 #include <trace/hooks/cgroup.h>
@@ -1088,6 +1089,15 @@ void vip_check_preempt_wakeup(void *unused, struct rq *rq, struct task_struct *p
 	bool resched = false;
 	bool p_is_vip, curr_is_vip;
 	vts_c = &((struct mtk_task *) rq->curr->android_vendor_data1)->vip_task;
+
+	if (IS_REACHABLE(CONFIG_XIAOMI_METIS)) {
+		bool skip_mtk_vip = false;
+
+		mi_check_preempt_wakeup_hook(rq, p, preempt, nopreempt,
+				&skip_mtk_vip);
+		if (*preempt || skip_mtk_vip)
+			return;
+	}
 
 	if (unlikely(!vip_enable))
 		return;
