@@ -168,10 +168,10 @@ void ufs_monitor_reset(void)
 }
 
 /* .text+0x5e88..0x6374: ring reservation is locked, filling is not. */
-static struct io_event *io_monitor_global_info(unsigned int action, u64 sector,
+static struct xiaomi_io_monitor_event *io_monitor_global_info(unsigned int action, u64 sector,
 		unsigned int bytes, unsigned int parent, u64 now, unsigned int rw)
 {
-	struct io_event *old = NULL, *event;
+	struct xiaomi_io_monitor_event *old = NULL, *event;
 	unsigned int index = __io_monitor_info_ctrl.index;
 	unsigned int left = min(__io_monitor_info_ctrl.count, 5000U);
 	unsigned int same = 64, i;
@@ -374,7 +374,7 @@ static void cb_block_rq_issue(void *unused, struct request *rq)
 static void cb_block_rq_complete(void *unused, struct request *rq,
 		blk_status_t status, unsigned int bytes)
 {
-	struct io_event *event;
+	struct xiaomi_io_monitor_event *event;
 	struct io_block_bucket *bucket;
 	u64 now, diff, delay[5], threshold;
 	unsigned int rw = req_op(rq), range, i, j;

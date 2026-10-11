@@ -21,7 +21,7 @@ struct io_common {
 	char task_state;
 	char padding[7];
 };
-struct io_event {
+struct xiaomi_io_monitor_event {
 	struct io_common common;
 	u8 action, rw;
 	u16 padding;
@@ -89,7 +89,7 @@ struct io_log {
 		struct { struct io_common common; u32 rw, padding; u64 last, size; struct io_ufs_bucket cycle[2]; } ufs;
 	} data;
 };
-struct io_ring_info { u32 index, count; struct io_event *buf; };
+struct io_ring_info { u32 index, count; struct xiaomi_io_monitor_event *buf; };
 struct io_ring_log { u32 index, count; u64 reserved; struct io_log *buf; };
 struct io_pio {
 	u8 valid;
