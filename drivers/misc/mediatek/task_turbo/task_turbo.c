@@ -1228,9 +1228,6 @@ static void probe_android_vh_alter_rwsem_list_add(void *ignore, struct rwsem_wai
 							struct rw_semaphore *sem,
 							bool *already_on_list)
 {
-	if (*already_on_list)
-		return;
-
 	rwsem_list_add(waiter->task, &waiter->list, &sem->wait_list);
 	*already_on_list = true;
 }
