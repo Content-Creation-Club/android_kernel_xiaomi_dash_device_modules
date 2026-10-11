@@ -182,7 +182,7 @@ void rebind_task_req(u32 *pids, u32 count, u32 cluster, bool unbind)
 		state->flags_0xc0 &= ~2U;
 		set_cpus_allowed_ptr(task, &MI_FIELD(state, cpumask_t, 0xd0));
 		/* Stock weights only W0 of the first native cpus_mask word. */
-		task->nr_cpus_allowed = hweight64((u32)cpumask_bits(&task->cpus_mask)[0]);
+		task->nr_cpus_allowed = hweight64((u64)(u32)cpumask_bits(&task->cpus_mask)[0]);
 		state->flags_0xc0 = (state->flags_0xc0 & ~4U) | (unbind ? 0 : 4);
 put:
 		put_task_struct(task);
