@@ -4,7 +4,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/moduleparam.h>
-#include <linux/timekeeping.h>
+#include <linux/ktime.h>
 #include "metis_common.h"
 
 int fas_suspend(void)

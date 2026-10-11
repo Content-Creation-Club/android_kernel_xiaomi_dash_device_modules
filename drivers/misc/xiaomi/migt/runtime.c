@@ -4,6 +4,7 @@
 #include <linux/percpu.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
+#include "kernel/sched/sched.h"
 #include "migt.h"
 
 struct rq;
