@@ -8,6 +8,7 @@
 #include <linux/xiaomi_metis.h>
 #include "../sugov/cpufreq.h"
 #include "common.h"
+#include "../migt_hooks.h"
 #include "eas_plus.h"
 #include "eas_trace.h"
 #include "vip.h"
@@ -475,6 +476,10 @@ static void mtk_rt_energy_aware_wake_cpu(struct task_struct *p,
 			if (cpu_high_irqload(cpu))
 				continue;
 
+			if (game_migt_should_skip_this_cpu_rt_hook &&
+			    game_migt_should_skip_this_cpu_rt_hook(p, cpu))
+				continue;
+
 			/* RT task skips cpu that runs latency_sensitive or vip tasks */
 #if IS_ENABLED(CONFIG_MTK_SCHED_VIP_TASK)
 			cpu_has_lt = is_task_latency_sensitive(cpu_rq(cpu)->curr)
@@ -622,6 +627,8 @@ void mtk_select_task_rq_rt(void *data, struct task_struct *p, int source_cpu,
 	 * Respect the sync flag as long as the task can run on this CPU.
 	 */
 	if (should_honor_rt_sync(this_cpu_rq, p, sync) &&
+	    !(game_migt_should_skip_this_cpu_rt_hook &&
+	      game_migt_should_skip_this_cpu_rt_hook(p, this_cpu)) &&
 	    cpumask_test_cpu(this_cpu, p->cpus_ptr)) {
 		*target_cpu = this_cpu;
 		select_reason = LB_RT_SYNC;
@@ -749,6 +756,8 @@ void mtk_find_lowest_rq(void *data, struct task_struct *p, struct cpumask *lowes
 	irq_log_store();
 
 	source_cpu = task_cpu(p);
+	if (game_migt_skip_lowest_rt_hook)
+		game_migt_skip_lowest_rt_hook(&avail_lowest_mask);
 
 	/* use prev cpu as target */
 	if (cpumask_test_cpu(source_cpu, &avail_lowest_mask)) {

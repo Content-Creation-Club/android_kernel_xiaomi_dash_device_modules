@@ -9,6 +9,7 @@
 #include <sched/sched.h>
 #include <sugov/cpufreq.h>
 #include "common.h"
+#include "../migt_hooks.h"
 #if IS_ENABLED(CONFIG_MTK_GEARLESS_SUPPORT)
 #include "mtk_energy_model/v3/energy_model.h"
 #else
@@ -809,6 +810,12 @@ void check_for_migration(struct task_struct *p)
 		if (new_cpu < 0) {
 			raw_spin_unlock(&migration_lock);
 			irq_log_store();
+			return;
+		}
+
+		if (game_migt_skip_sched_tick_migrate_hook &&
+		    game_migt_skip_sched_tick_migrate_hook(p, new_cpu)) {
+			raw_spin_unlock(&migration_lock);
 			return;
 		}
 
