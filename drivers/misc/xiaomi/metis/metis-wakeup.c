@@ -3,6 +3,7 @@
 #include <linux/bitops.h>
 #include <linux/cpumask.h>
 #include <linux/errno.h>
+#include <linux/futex.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
