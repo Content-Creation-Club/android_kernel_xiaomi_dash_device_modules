@@ -57,7 +57,7 @@ int migt_init(void)
 			goto initial_qos_failed;
 		}
 		ret = freq_qos_add_request(&policy->constraints,
-			&per_cpu(qos_req_min, cpu), FREQ_QOS_MIN, FREQ_QOS_MIN_DEFAULT);
+			&per_cpu(qos_req_min, cpu), FREQ_QOS_MIN, FREQ_QOS_MIN_DEFAULT_VALUE);
 		if (ret < 0) {
 			printk("\0013migt: %s: Failed to add min freq constraint (%d)\n",
 				"migt_freq_qos_request_init_first", ret);
@@ -65,7 +65,7 @@ int migt_init(void)
 			goto initial_qos_failed;
 		}
 		ret = freq_qos_add_request(&policy->constraints,
-			&per_cpu(qos_req_max, cpu), FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT);
+			&per_cpu(qos_req_max, cpu), FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT_VALUE);
 		if (ret < 0) {
 			printk("\0013migt: %s: Failed to add max freq constraint (%d)\n",
 				"migt_freq_qos_request_init_first", ret);
@@ -118,7 +118,7 @@ init_timers:
 		if (cpu >= 32)
 			break;
 		per_cpu(migt_info, cpu).unknown_00 = cpu;
-		per_cpu(migt_info, cpu).max_freq = FREQ_QOS_MAX_DEFAULT;
+		per_cpu(migt_info, cpu).max_freq = FREQ_QOS_MAX_DEFAULT_VALUE;
 	}
 	migt_sched_enable = migt_enable;
 	register_mi_sched_enable(0, migt_enable);

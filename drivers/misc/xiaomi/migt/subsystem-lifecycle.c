@@ -7,6 +7,7 @@
 #include <trace/hooks/cpufreq.h>
 #include <trace/hooks/sched.h>
 #include "subsystem_lifecycle.h"
+#include "../metis/metis_state.h"
 
 /* Repeated stock topology walk extracted from the frame/game init bodies.
  * Only low32 possible CPUs are scanned; no native topology is guessed. */
