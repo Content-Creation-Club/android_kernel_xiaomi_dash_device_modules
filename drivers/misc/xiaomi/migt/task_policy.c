@@ -85,13 +85,13 @@ bool game_ssuper_task(struct task_struct *task)
 	return game_super_task(task) >> 8;
 }
 
-unsigned long is_uuser_set_vip(struct task_struct *task)
+unsigned long migt_is_uuser_set_vip(struct task_struct *task)
 {
 	struct migt_task_state *gt = get_gt_task(task);
 	return migt_enable() && same_game_uid(task) && gt ? (GT_FLAGS(gt) >> 5) & 1 : 0;
 }
 
-unsigned long is_uuser_set_ip(struct task_struct *task)
+unsigned long migt_is_uuser_set_ip(struct task_struct *task)
 {
 	struct migt_task_state *gt = get_gt_task(task);
 	return migt_enable() && same_game_uid(task) && gt ? (GT_FLAGS(gt) >> 3) & 1 : 0;
@@ -152,10 +152,10 @@ int migt_choose_exclusive_cpu(struct task_struct *task)
 	} else if (game_render_task(task)) {
 		preferred = render_prefer_cpu;
 		affine = render_affine_cpu;
-	} else if (is_uuser_set_vip(task)) {
+	} else if (migt_is_uuser_set_vip(task)) {
 		preferred = vip_prefer_cpu;
 		affine = vip_affine_cpu;
-	} else if (is_uuser_set_ip(task)) {
+	} else if (migt_is_uuser_set_ip(task)) {
 		preferred = ip_prefer_cpu;
 		affine = ip_affine_cpu;
 	} else {
@@ -200,9 +200,9 @@ bool migt_should_skip_migrate(struct task_struct *task, unsigned int cpu)
 				return true;
 			if (game_ssuper_task(task) && (stask_prefer_cpu != -1 || stask_affine_cpu != -1))
 				return true;
-			if (is_uuser_set_vip(task) && (vip_prefer_cpu != -1 || vip_affine_cpu != -1))
+			if (migt_is_uuser_set_vip(task) && (vip_prefer_cpu != -1 || vip_affine_cpu != -1))
 				return true;
-			if (is_uuser_set_ip(task) && (ip_prefer_cpu != -1 || ip_affine_cpu != -1))
+			if (migt_is_uuser_set_ip(task) && (ip_prefer_cpu != -1 || ip_affine_cpu != -1))
 				return true;
 		}
 		return false;
@@ -212,9 +212,9 @@ bool migt_should_skip_migrate(struct task_struct *task, unsigned int cpu)
 			return false;
 		if (game_ssuper_task(task) && stask_prefer_cpu != -1 && stask_prefer_cpu == cpu)
 			return false;
-		if (is_uuser_set_vip(task) && vip_prefer_cpu != -1 && vip_prefer_cpu == cpu)
+		if (migt_is_uuser_set_vip(task) && vip_prefer_cpu != -1 && vip_prefer_cpu == cpu)
 			return false;
-		if (is_uuser_set_ip(task) && ip_prefer_cpu != -1 && ip_prefer_cpu == cpu)
+		if (migt_is_uuser_set_ip(task) && ip_prefer_cpu != -1 && ip_prefer_cpu == cpu)
 			return false;
 	}
 	return true;
@@ -255,7 +255,7 @@ bool migt_add_task_to_second(int pid)
 	rcu_read_lock();
 	task = find_task_by_vpid(pid);
 	if (task)
-		found = is_uuser_set_ip(task) || is_uuser_set_vip(task);
+		found = migt_is_uuser_set_ip(task) || migt_is_uuser_set_vip(task);
 	rcu_read_unlock();
 	return found;
 }
@@ -269,9 +269,9 @@ bool game_choose_cpu_overutiled(struct task_struct *task)
 	if (game_render_task(task) && render_prefer_cluster >= 0)
 		return true;
 	if (force_viptask_select_rq < 2) {
-		if (is_uuser_set_vip(task) && vip_prefer_cluster >= 0)
+		if (migt_is_uuser_set_vip(task) && vip_prefer_cluster >= 0)
 			return true;
-		if (!is_uuser_set_ip(task))
+		if (!migt_is_uuser_set_ip(task))
 			return false;
 	} else {
 		if (game_vvip_task(task) && vip_prefer_cluster >= 0)

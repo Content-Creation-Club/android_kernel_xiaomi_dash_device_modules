@@ -181,8 +181,8 @@ static const char *game_class(struct task_struct *task)
 {
 	if (game_super_task(task)) return "sup ";
 	if (is_render_thread(task)) return "ren ";
-	if (is_uuser_set_vip(task) & 1) return "uvip";
-	if (is_uuser_set_ip(task) & 1) return "uip ";
+	if (migt_is_uuser_set_vip(task) & 1) return "uvip";
+	if (migt_is_uuser_set_ip(task) & 1) return "uip ";
 	if (game_vip_task(task)) return "vip ";
 	return game_ip_task(task) ? "imp " : "nor ";
 }

@@ -6,7 +6,6 @@
 module_init(migt_init);
 module_exit(migt_exit);
 
-EXPORT_SYMBOL_GPL(get_gt_task);
 EXPORT_SYMBOL_GPL(migt_sched_exit);
 EXPORT_SYMBOL_GPL(game_load_exit);
 EXPORT_SYMBOL_GPL(game_load_init);

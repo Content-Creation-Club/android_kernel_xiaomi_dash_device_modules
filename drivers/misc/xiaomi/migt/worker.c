@@ -113,11 +113,11 @@ bool game_lb_control(struct task_struct *task, int source_cpu,
 		return true;
 	/* The stock module parameter is uint, but this comparison is signed. */
 	if ((s32)force_forbidden_walt_lb < 2) {
-		if (is_uuser_set_vip(task) && vip_prefer_cluster >= 0 &&
+		if (migt_is_uuser_set_vip(task) && vip_prefer_cluster >= 0 &&
 		    get_cluster_type(destination_cpu) != vip_prefer_cluster &&
 		    get_cluster_type(source_cpu) == vip_prefer_cluster)
 			return true;
-		if (!is_uuser_set_ip(task))
+		if (!migt_is_uuser_set_ip(task))
 			return false;
 	} else {
 		if (game_vvip_task(task) && vip_prefer_cluster >= 0 &&
