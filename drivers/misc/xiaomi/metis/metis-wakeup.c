@@ -16,11 +16,7 @@
 #include "kernel/sched/sched.h"
 #include "metis_wakeup.h"
 
-/* Actual stock event emission interface; full event schema/metadata and
- * tracepoint/static-call state ownership remain missing. */
-DECLARE_TRACE(mi_wakeup_link,
-	TP_PROTO(struct task_struct *task, const char *reason),
-	TP_ARGS(task, reason));
+#include "metis-final-trace.h"
 
 int metis_wakeup_ui_pipeline_select_rq(struct task_struct *task,
 		struct cpumask *excluded, int wake_flags)

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config XIAOMI_METIS
+	tristate "Xiaomi METIS stock reconstruction"
+	depends on ARM64 && ANDROID_VENDOR_HOOKS && ANDROID_VENDOR_OEM_DATA
+	default n
+	help
+	  Experimental reconstruction from dash OS3.0.305 METIS. Original
+	  defects are retained. Stock machine-entry bridges are saved, while
+	  canonical C/MODVERSIONS contracts and genuine provider integration
+	  remain unresolved; see RECONSTRUCTION.md. Leaf source
+	  metadata does not activate parent traversal or package the module.
+	  Native compilation, KMI/CFI, loading and runtime remain untested.

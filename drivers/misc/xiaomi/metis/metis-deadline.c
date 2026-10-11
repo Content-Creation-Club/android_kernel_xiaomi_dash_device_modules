@@ -7,16 +7,7 @@
 #include "metis_common.h"
 #include "metis_deadline.h"
 
-/* Backing tracepoint/static-call objects and event metadata are still absent. */
-DECLARE_TRACE(metis_deadline_pick_task,
-	TP_PROTO(struct mi_task_struct *state, unsigned int cpu, u64 now),
-	TP_ARGS(state, cpu, now));
-DECLARE_TRACE(metis_deadline_enqueue_task,
-	TP_PROTO(struct mi_task_struct *state, unsigned int cpu, u64 now),
-	TP_ARGS(state, cpu, now));
-DECLARE_TRACE(metis_deadline_dequeue_task,
-	TP_PROTO(struct mi_task_struct *state, unsigned int cpu, u64 now),
-	TP_ARGS(state, cpu, now));
+#include "metis-final-trace.h"
 
 static __always_inline void deadline_stock_cpu_bound(unsigned int cpu)
 {

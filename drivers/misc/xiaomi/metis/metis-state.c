@@ -138,14 +138,14 @@ bool is_static_vip(struct mi_task_struct *state)
 {
 	unsigned int index = metis_request_index(state);
 
-	return index < 7 && (important_tasks[index][0x18] & 2);
+	return index < 7 && (important_tasks[index].raw[0x18] & 2);
 }
 
 bool is_top_app_vip(struct mi_task_struct *state)
 {
 	unsigned int index = metis_request_index(state);
 
-	return index < 7 && (important_tasks[index][0x18] & 1);
+	return index < 7 && (important_tasks[index].raw[0x18] & 1);
 }
 
 void clear_task_low_lt(struct mi_task_struct *state)

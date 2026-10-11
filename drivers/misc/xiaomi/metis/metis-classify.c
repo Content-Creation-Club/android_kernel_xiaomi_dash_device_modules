@@ -30,7 +30,7 @@ bool is_deadline_task(struct mi_task_struct *state)
 			return false;
 		index = MI_FIELD(leader, u32, 0x2fc);
 	}
-	return index < 7 && (important_tasks[index][0x18] & 8);
+	return index < 7 && (important_tasks[index].raw[0x18] & 8);
 }
 
 bool is_deadline_depend_main_task(struct mi_task_struct *state)
@@ -48,7 +48,7 @@ bool is_deadline_depend_main_task(struct mi_task_struct *state)
 			return false;
 		index = MI_FIELD(leader, u32, 0x2fc);
 	}
-	return index < 7 && (important_tasks[index][0x18] & 16);
+	return index < 7 && (important_tasks[index].raw[0x18] & 16);
 }
 
 bool is_low_lt_task(struct mi_task_struct *state)

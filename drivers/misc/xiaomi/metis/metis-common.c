@@ -471,7 +471,7 @@ u8 *get_important_task_info(struct mi_task_struct *state)
 	index = MI_FIELD(state, u32, 0x2f8);
 	if (index == UINT_MAX)
 		index = get_process_config_index(state->task);
-	return index < 7 ? important_tasks[index] : NULL;
+	return index < 7 ? important_tasks[index].raw : NULL;
 }
 
 s32 get_metis_deadline_ms(struct mi_task_struct *state)

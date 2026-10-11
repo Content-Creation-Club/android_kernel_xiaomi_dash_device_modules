@@ -40,6 +40,7 @@ void dequeue_vip_task(struct rq *rq, struct task_struct *task);
 void mi_dequeue_task_fair_hook(struct rq *rq, struct task_struct *task, int flags);
 void register_mi_enqueue_entity_hook(metis_enqueue_entity_fn hook);
 void unregister_mi_enqueue_entity_hook(void);
+void prio_sched_check(struct rq *rq);
 struct task_struct *mi_pick_task_fair(unsigned int cpu);
 void mi_pick_next_task_fair_hook(void *unused, struct rq *rq,
 		struct task_struct **task, struct sched_entity **entity,

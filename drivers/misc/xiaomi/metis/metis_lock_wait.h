@@ -39,6 +39,6 @@ void mi_pcpu_rwsem_wq_add(void *unused, struct percpu_rw_semaphore *sem,
 void mi_rwsem_write_wait_finish_hook(void *unused, struct rw_semaphore *sem);
 void mi_lock_rwsem_wake_finish_hook(void *unused, struct rw_semaphore *sem);
 
-/* mi_rwsem_list_add_hook and mi_rwsem_read_trylock_failed stay absent: the
- * native rwsem_waiter definition has no canonical standalone header here. */
+/* Remaining native waiter consumers are declared in metis-final-link.h;
+ * kernel/locking/rwsem.h now shares rwsem.c's canonical waiter definition. */
 #endif

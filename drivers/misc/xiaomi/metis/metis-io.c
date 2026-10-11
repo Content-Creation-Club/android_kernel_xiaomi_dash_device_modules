@@ -13,12 +13,7 @@
 /* Native declaration also exists in linux/fortify-string.h when enabled. */
 extern void fortify_panic(const char *name) __noreturn __cold;
 
-/* Original event schemas/backing tracepoint owners remain unreconstructed. */
-DECLARE_TRACE(metis_iowait_status_update,
-	TP_PROTO(struct task_struct *task, u32 flags), TP_ARGS(task, flags));
-DECLARE_TRACE(metis_verity_work_start,
-	TP_PROTO(struct task_struct *task, u64 elapsed, int window),
-	TP_ARGS(task, elapsed, window));
+#include "metis-final-trace.h"
 
 void metis_io_schedule_hook(struct task_struct *task)
 {

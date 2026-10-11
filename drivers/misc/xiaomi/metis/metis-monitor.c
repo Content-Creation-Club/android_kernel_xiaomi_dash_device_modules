@@ -37,7 +37,7 @@ void monitor_task_enqueue(struct mi_task_struct *state)
 	}
 	if (index >= 7)
 		return;
-	record = important_tasks[index];
+	record = important_tasks[index].raw;
 	if (!(unsigned long)record || !(record[0x18] & 4))
 		return;
 	/* Stock re-reads the owner without another task NULL guard here. */

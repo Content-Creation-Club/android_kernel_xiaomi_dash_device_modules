@@ -13,16 +13,7 @@
 #include "metis_vip_queue.h"
 #include "metis-lowlt-trace.h"
 
-/* Actual stock emission contracts. These declarations preserve the calls
- * and their static-key/current-CPU/preempt gates. Full event definitions,
- * backing tracepoint/static-call owners and metadata remain missing. */
-DECLARE_TRACE(metis_vip_task_flag,
-	TP_PROTO(struct mi_task_struct *state, unsigned long now),
-	TP_ARGS(state, now));
-DECLARE_TRACE(metis_enqueue_vip_task,
-	TP_PROTO(struct task_struct *task), TP_ARGS(task));
-DECLARE_TRACE(mi_pick_next_vip_task,
-	TP_PROTO(struct task_struct *task, const char *type), TP_ARGS(task, type));
+#include "metis-final-trace.h"
 
 extern void set_next_entity(struct cfs_rq *cfs, struct sched_entity *entity);
 
@@ -46,7 +37,7 @@ static __always_inline struct list_head *vip_node(struct mi_task_struct *state)
 
 /* .text+0xea48..0xeb84: disabled priority scheduling resumes after one
  * billion clock units. The subtraction/threshold comparison is unsigned. */
-static void prio_sched_check(struct rq *rq)
+void prio_sched_check(struct rq *rq)
 {
 	unsigned int cpu = cpu_of(rq);
 	struct metis_rq *state;

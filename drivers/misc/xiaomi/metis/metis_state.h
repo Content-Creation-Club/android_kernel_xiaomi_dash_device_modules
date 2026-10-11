@@ -19,10 +19,22 @@ extern unsigned int metis_debug;
 extern unsigned int foreground_uid;
 extern u8 fas_ktime_suspended;
 extern s32 fas_ktime_last;
-/* important_tasks .data+0x3eb0: 7 records, each 0x28 bytes. Only policy
- * bits at record+0x18 are consumed here. Prefix pointer relocations belong
- * to the still-missing table/controller implementation. */
-extern u8 important_tasks[7][0x28];
+/* Stock .data+0x3eb0: seven private records, each 0x28 bytes. Typed
+ * pointer fields retain native relocations; raw access preserves consumers. */
+union metis_important_task {
+	u8 raw[0x28];
+	struct {
+		const char *thread_pattern;
+		const char *process_pattern;
+		u32 disabled;
+		u32 uid;
+		u32 flags;
+		s32 deadline_ms;
+		u32 main_thread_depend;
+		u32 unknown_24;
+	} fields;
+};
+extern union metis_important_task important_tasks[7];
 
 unsigned int cpu_to_cluster(unsigned int cpu);
 u64 fas_sched_clock(void);

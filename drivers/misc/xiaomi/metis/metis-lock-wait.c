@@ -19,15 +19,7 @@
 #include "metis_common.h"
 #include "metis_lock_wait.h"
 
-/* Backing custom event owners/schemas remain absent. Observed argument widths
- * and low-bit booleans are preserved; original source typedefs are unknown. */
-DECLARE_TRACE(mi_set_mutex_vip_task,
-	TP_PROTO(struct task_struct *task, struct task_struct *owner),
-	TP_ARGS(task, owner));
-DECLARE_TRACE(mi_lock_info,
-	TP_PROTO(struct task_struct *task, bool vip, const char *type,
-		 int owner_pid, int owner_prio, bool owner_vip),
-	TP_ARGS(task, vip, type, owner_pid, owner_prio, owner_vip));
+#include "metis-final-trace.h"
 
 /* The stock calls the real core corruption reporter even when a list is not
  * inserted. LIST_HARDENED's native declaration carries its calling convention. */
