@@ -6,13 +6,10 @@
 #include <linux/percpu.h>
 #include <linux/sysctl.h>
 #include <linux/xiaomi_metis.h>
+#include "metis_lowlt.h"
 #include "metis_vip_queue.h"
 #include "metis_coldstart_policy.h"
 #include "metis_walt_policy.h"
-
-/* METIS's own .data..percpu object, ELF symbol size 0x280. This is private
- * driver storage, never a replica of a native struct rq. */
-struct metis_rq { u8 raw[0x280] __aligned(8); };
 
 /* .bss+0x15db0/0x15ea0/0x15f90: three 10 x 0x18 histories. */
 struct metis_final_long_run {

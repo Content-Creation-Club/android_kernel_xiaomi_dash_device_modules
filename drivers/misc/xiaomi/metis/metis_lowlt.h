@@ -4,9 +4,9 @@
 #include <linux/percpu.h>
 #include "metis_classify.h"
 
-/* Stock-defined per-CPU owners; their lifecycle remains unreconstructed.
- * Only metis_runqueues +0x268 is consumed here. Do not invent its C layout. */
-struct metis_rq;
+/* METIS's own .data..percpu object, ELF symbol size 0x280. This is private
+ * driver storage, never a replica of a native struct rq. */
+struct metis_rq { u8 raw[0x280] __aligned(8); };
 DECLARE_PER_CPU_SHARED_ALIGNED(struct metis_rq, metis_runqueues);
 /* Original signedness unknown; u32 expresses the observed 32-bit wrap. */
 DECLARE_PER_CPU(u32, low_lt_num);
