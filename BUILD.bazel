@@ -6,6 +6,7 @@ package(
 
 
 load("//build/bazel_mgk_rules:mgk.bzl", "define_mgk")
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
 mgk_kmi_symbol_list = "//kernel-6.6:android/abi_gki_aarch64_mtk"
 
@@ -74,4 +75,31 @@ define_mgk(
     platform_device_user_modules = mgk_64_platform_device_user_modules,
     symbol_list = mgk_kmi_symbol_list,
     dtb_files = ["mediatek/dash.dtb"],
+)
+
+# These consumers use the audited OS3.0.305 platform ABI. Keep the normal
+# device-module build and its providers on their native source ABI.
+kernel_module(
+    name = "dash_stock305_heap_refill.user",
+    srcs = [
+        ":mgk_64_k66_sources",
+        "//kernel_device_modules-6.6/drivers/dma-buf/heaps/stock-platform-abi:sources",
+    ],
+    makefile = ["//kernel_device_modules-6.6/drivers/dma-buf/heaps/stock-platform-abi:Makefile"],
+    outs = ["mtk_heap_refill.ko"],
+    kernel_build = ":mgk_64_k66.user",
+    deps = [":mgk_64_k66_modules.user"],
+)
+
+kernel_module(
+    name = "dash_stock305_disp_sec.user",
+    srcs = [
+        ":mgk_64_k66_sources",
+        "//kernel_device_modules-6.6/drivers/dma-buf/heaps/stock-platform-abi:build_rules",
+        "//kernel_device_modules-6.6/drivers/gpu/drm/mediatek/mediatek_v2/stock-platform-abi:sources",
+    ],
+    makefile = ["//kernel_device_modules-6.6/drivers/gpu/drm/mediatek/mediatek_v2/stock-platform-abi:Makefile"],
+    outs = ["mtk_disp_sec.ko"],
+    kernel_build = ":mgk_64_k66.user",
+    deps = [":mgk_64_k66_modules.user"],
 )

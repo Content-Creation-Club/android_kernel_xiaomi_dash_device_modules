@@ -1,0 +1,5 @@
+0x7e478bd2	mtk_dmabuf_page_pool_total	system_heap	EXPORT_SYMBOL_GPL	
+0x709f6137	mtk_dmabuf_page_pool_fetch	system_heap	EXPORT_SYMBOL_GPL	
+0x2d945727	mtk_dmabuf_page_pool_add	system_heap	EXPORT_SYMBOL_GPL	
+0xcb6d1637	dmabuf_log_recycle	system_heap	EXPORT_SYMBOL_GPL	
+0xe8bc10fa	dmabuf_log_refill	system_heap	EXPORT_SYMBOL_GPL	

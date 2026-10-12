@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0
+LINUXINCLUDE := $(DEVCIE_MODULES_INCLUDE) $(LINUXINCLUDE)
+include $(DEVICE_MODULES_PATH)/drivers/gpu/drm/mediatek/mediatek_v2/Makefile
+obj-y :=
+obj-m := mtk_disp_sec.o
+ccflags-y += -Werror -I$(DEVICE_MODULES_PATH)/include/uapi
