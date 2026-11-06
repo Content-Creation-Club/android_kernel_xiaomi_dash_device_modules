@@ -3,6 +3,7 @@
  * Copyright (c) 2022 MediaTek Inc.
  */
 
+#include <linux/math64.h>
 #include <linux/sched.h>
 #include <linux/sched/cputime.h>
 #include <sched/sched.h>
@@ -77,7 +78,7 @@ int sched_adpf_callback(struct _SESSION *session)
 		durationNanos = session->workDuration[session->work_duration_size - 1]->durationNanos;
 		targetDurationNanos = session->targetDurationNanos;
 		if(durationNanos > 0 && targetDurationNanos > 0) {
-			adpf_ratio = (durationNanos * 1024) / targetDurationNanos;
+			adpf_ratio = div_u64((u64)durationNanos * 1024, targetDurationNanos);
 			set_group_active_ratio_cap(GROUP_ID_2, adpf_ratio);
 		} else {
 			set_group_active_ratio_cap(GROUP_ID_2, 0);
