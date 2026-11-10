@@ -82,7 +82,7 @@
 #define FP_IOC_DEV_INFO                 _IOR(FP_IOC_MAGIC, 40, __u8)
 #define FP_IOC_RESET_OUT_LOW            _IO(FP_IOC_MAGIC, 41)
 #define FP_IOC_RESET_TIME_MS            _IOW(FP_IOC_MAGIC, 44, __u32)
-#define FP_IOC_INTR2_SIDE_CONFIG        _IOR(FP_IOC_MAGIC, 46, __u32)
+#define FP_IOC_INTR2_SIDE_CONFIG        _IOR(FP_IOC_MAGIC, 45, __u32)
 #define FP_IOC_SENSOR_LOC               _IOR(FP_IOC_MAGIC, 47, __u32)
 
 #define FP_INTR2_NONE           0
