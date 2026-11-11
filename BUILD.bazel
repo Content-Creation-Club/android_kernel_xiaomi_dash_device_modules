@@ -6,7 +6,12 @@ package(
 
 
 load("//build/bazel_mgk_rules:mgk.bzl", "define_mgk")
-load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+load(
+    "//build/kernel/kleaf:kernel.bzl",
+    "kernel_images",
+    "kernel_module",
+    "kernel_modules_install",
+)
 
 mgk_kmi_symbol_list = "//kernel-6.6:android/abi_gki_aarch64_mtk"
 
@@ -75,7 +80,32 @@ define_mgk(
     platform_device_user_modules = mgk_64_platform_device_user_modules,
     symbol_list = mgk_kmi_symbol_list,
     strip_user_device_modules = True,
+    # Kleaf's system_dlkm action re-signs the staged core modules.
+    user_core_implicit_outs = [
+        "scripts/sign-file",
+        "certs/signing_key.pem",
+        "certs/signing_key.x509",
+    ],
+    user_defconfig_fragments = ["kernel/configs/tls.config"],
+    user_gki_modules = ["net/tls/tls.ko"],
     dtb_files = ["mediatek/dash.dtb"],
+)
+
+# Package the signed core modules separately from the MTK device modules.
+kernel_modules_install(
+    name = "core_modules.user",
+    kernel_build = ":mgk_64_k66_kernel_aarch64.user",
+    kernel_modules = [],
+)
+
+kernel_images(
+    name = "system_dlkm.user",
+    kernel_build = ":mgk_64_k66_kernel_aarch64.user",
+    kernel_modules_install = ":core_modules.user",
+    build_system_dlkm = True,
+    build_system_dlkm_flatten = True,
+    system_dlkm_fs_types = ["erofs"],
+    modules_list = "//kernel-6.6:gki_system_dlkm_modules_arm64",
 )
 
 # These consumers use the audited OS3.0.305 platform ABI. Keep the normal
