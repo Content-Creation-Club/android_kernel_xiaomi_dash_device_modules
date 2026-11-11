@@ -8,10 +8,12 @@ package(
 load("//build/bazel_mgk_rules:mgk.bzl", "define_mgk")
 load(
     "//build/kernel/kleaf:kernel.bzl",
+    "kernel_build",
     "kernel_images",
     "kernel_module",
     "kernel_modules_install",
 )
+load("//build/kernel/kleaf:constants.bzl", "DEFAULT_GKI_OUTS")
 
 mgk_kmi_symbol_list = "//kernel-6.6:android/abi_gki_aarch64_mtk"
 
@@ -91,6 +93,51 @@ define_mgk(
     dtb_files = ["mediatek/dash.dtb"],
 )
 
+kernel_build(
+    name = "kernel_strict.user",
+    srcs = [
+        "//kernel-6.6:kernel_aarch64_sources",
+        ":mgk_configs",
+    ],
+    build_config = ":kernel_aarch64_mgk_64_k66_build_config.user",
+    clang_autofdo_profile = "@dash_kernel_profiles//:aarch64/android15-6.6/kernel.afdo",
+    defconfig_fragments = ["kernel/configs/tls.config"],
+    make_goals = [
+        "PAHOLE_FLAGS=--btf_gen_floats",
+        "Image",
+        "Image.lz4",
+        "Image.gz",
+        "modules",
+        "dtbs",
+    ],
+    strip_modules = True,
+    outs = DEFAULT_GKI_OUTS,
+    module_implicit_outs = mgk_64_common_modules + ["net/tls/tls.ko"],
+    kmi_symbol_list = "//kernel-6.6:android/abi_gki_aarch64",
+    additional_kmi_symbol_lists = ["//kernel-6.6:aarch64_additional_kmi_symbol_lists"],
+    protected_exports_list = "//kernel-6.6:android/abi_gki_protected_exports_aarch64",
+    protected_modules_list = "//kernel-6.6:gki_aarch64_protected_modules",
+    trim_nonlisted_kmi = True,
+    kmi_symbol_list_strict_mode = True,
+)
+
+# Early bootstrap for strict custom and official cores.
+kernel_module(
+    name = "ufs_wlun_bootstrap_strict.user",
+    srcs = ["//kernel_device_modules-6.6/drivers/ufs/wlun_bootstrap:sources"],
+    makefile = ["//kernel_device_modules-6.6/drivers/ufs/wlun_bootstrap:Makefile"],
+    outs = ["ufs_wlun_bootstrap.ko"],
+    kernel_build = ":kernel_strict.user",
+)
+
+kernel_module(
+    name = "ufs_wlun_bootstrap.user",
+    srcs = ["//kernel_device_modules-6.6/drivers/ufs/wlun_bootstrap:sources"],
+    makefile = ["//kernel_device_modules-6.6/drivers/ufs/wlun_bootstrap:Makefile"],
+    outs = ["ufs_wlun_bootstrap.ko"],
+    kernel_build = ":mgk_64_k66_kernel_aarch64.user",
+)
+
 # Package the signed core modules separately from the MTK device modules.
 kernel_modules_install(
     name = "core_modules.user",
@@ -111,25 +158,25 @@ kernel_images(
 # These consumers use the audited OS3.0.305 platform ABI. Keep the normal
 # device-module build and its providers on their native source ABI.
 kernel_module(
-    name = "dash_stock305_heap_refill.user",
+    name = "heap_refill_compat.user",
     srcs = [
         ":mgk_64_k66_sources",
-        "//kernel_device_modules-6.6/drivers/dma-buf/heaps/stock-platform-abi:sources",
+        "//kernel_device_modules-6.6/drivers/dma-buf/heaps/platform-abi:sources",
     ],
-    makefile = ["//kernel_device_modules-6.6/drivers/dma-buf/heaps/stock-platform-abi:Makefile"],
+    makefile = ["//kernel_device_modules-6.6/drivers/dma-buf/heaps/platform-abi:Makefile"],
     outs = ["mtk_heap_refill.ko"],
     kernel_build = ":mgk_64_k66.user",
     deps = [":mgk_64_k66_modules.user"],
 )
 
 kernel_module(
-    name = "dash_stock305_disp_sec.user",
+    name = "display_security_compat.user",
     srcs = [
         ":mgk_64_k66_sources",
-        "//kernel_device_modules-6.6/drivers/dma-buf/heaps/stock-platform-abi:build_rules",
-        "//kernel_device_modules-6.6/drivers/gpu/drm/mediatek/mediatek_v2/stock-platform-abi:sources",
+        "//kernel_device_modules-6.6/drivers/dma-buf/heaps/platform-abi:build_rules",
+        "//kernel_device_modules-6.6/drivers/gpu/drm/mediatek/mediatek_v2/platform-abi:sources",
     ],
-    makefile = ["//kernel_device_modules-6.6/drivers/gpu/drm/mediatek/mediatek_v2/stock-platform-abi:Makefile"],
+    makefile = ["//kernel_device_modules-6.6/drivers/gpu/drm/mediatek/mediatek_v2/platform-abi:Makefile"],
     outs = ["mtk_disp_sec.ko"],
     kernel_build = ":mgk_64_k66.user",
     deps = [":mgk_64_k66_modules.user"],

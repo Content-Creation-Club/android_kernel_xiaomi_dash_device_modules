@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef DASH_STOCK305_HEAP_ABI_H
-#define DASH_STOCK305_HEAP_ABI_H
+#ifndef HEAP_PLATFORM_ABI_H
+#define HEAP_PLATFORM_ABI_H
 
 #include <linux/build_bug.h>
 #include <linux/mm.h>
@@ -36,23 +36,23 @@ struct mtk_dmabuf_page_pool {
 	u8 opaque_98_a7[0x10];
 };
 
-#define STOCK305_POOL_FIELD(member, offset, width) \
+#define ASSERT_POOL_FIELD(member, offset, width) \
 	static_assert(offsetof(struct mtk_dmabuf_page_pool, member) == offset); \
 	static_assert(sizeof_field(struct mtk_dmabuf_page_pool, member) == width)
 
 static_assert(PAGE_SHIFT == 12);
 static_assert(sizeof(struct mtk_dmabuf_page_pool) == 0xa8);
-STOCK305_POOL_FIELD(gfp_mask, 0x2c, 4);
-STOCK305_POOL_FIELD(order, 0x30, 4);
-STOCK305_POOL_FIELD(pool_list, 0x48, 8);
-STOCK305_POOL_FIELD(refill_kthread, 0x60, 8);
-STOCK305_POOL_FIELD(need_refill, 0x68, 8);
-STOCK305_POOL_FIELD(need_recycle, 0x70, 8);
-STOCK305_POOL_FIELD(order_index, 0x78, 4);
-STOCK305_POOL_FIELD(refilling, 0x80, 1);
-STOCK305_POOL_FIELD(recycling, 0x81, 1);
-STOCK305_POOL_FIELD(refill_time, 0x90, 8);
-#undef STOCK305_POOL_FIELD
+ASSERT_POOL_FIELD(gfp_mask, 0x2c, 4);
+ASSERT_POOL_FIELD(order, 0x30, 4);
+ASSERT_POOL_FIELD(pool_list, 0x48, 8);
+ASSERT_POOL_FIELD(refill_kthread, 0x60, 8);
+ASSERT_POOL_FIELD(need_refill, 0x68, 8);
+ASSERT_POOL_FIELD(need_recycle, 0x70, 8);
+ASSERT_POOL_FIELD(order_index, 0x78, 4);
+ASSERT_POOL_FIELD(refilling, 0x80, 1);
+ASSERT_POOL_FIELD(recycling, 0x81, 1);
+ASSERT_POOL_FIELD(refill_time, 0x90, 8);
+#undef ASSERT_POOL_FIELD
 
 int mtk_dmabuf_page_pool_total(struct mtk_dmabuf_page_pool *pool, bool high);
 struct page *mtk_dmabuf_page_pool_fetch(struct mtk_dmabuf_page_pool *pool);

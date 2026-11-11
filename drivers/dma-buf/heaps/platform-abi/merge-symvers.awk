@@ -11,7 +11,7 @@ NR == FNR {
 $2 in crc {
     n = split($3, parts, "/")
     if (parts[n] != provider[$2] || $4 != export_type[$2] || $5 != "" || seen[$2]++) {
-        print "stock305 ABI: unexpected provider metadata for " $2 > "/dev/stderr"
+        print "provider ABI: unexpected provider metadata for " $2 > "/dev/stderr"
         failed = 1
     }
     sub(/^[^\t]+/, crc[$2])
@@ -20,7 +20,7 @@ $2 in crc {
 END {
     for (symbol in crc) {
         if (!seen[symbol]) {
-            print "stock305 ABI: missing provider symbol " symbol > "/dev/stderr"
+            print "provider ABI: missing provider symbol " symbol > "/dev/stderr"
             failed = 1
         }
     }

@@ -1,0 +1,8 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Makefile"])
+
+filegroup(
+    name = "sources",
+    srcs = ["ufs_wlun_bootstrap.c", "Kbuild", "Makefile"],
+)
